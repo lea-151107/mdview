@@ -150,6 +150,9 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 ==============================================================================
 7. ハイライト					*mdview-highlights*
 
+MdviewHeading	ビューアの見出しの行（既定: 太字）。markdown の構文の色に
+		重ねて使うので、色を付けずに属性だけを指定するのが普通です。
+		例: `highlight MdviewHeading cterm=bold,underline gui=bold,underline`
 MdviewText	文字での代替表示（既定: Normal）
 MdviewError	エラー（既定: ErrorMsg）
 

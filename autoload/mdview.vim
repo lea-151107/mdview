@@ -56,12 +56,17 @@ function! s:init() abort
   call goda#register('mdview', s:bin(), #{version: s:script_version})
   highlight default link MdviewText Normal
   highlight default link MdviewError ErrorMsg
+  " Only attributes: combined with the colors of the markdown syntax.
+  highlight default MdviewHeading term=bold cterm=bold gui=bold
   for [name, hl] in [['mdview_anchor', ''], ['mdview_anchor_end', ''],
         \ ['mdview_text', 'MdviewText'], ['mdview_error', 'MdviewError']]
     if empty(prop_type_get(name))
       call prop_type_add(name, empty(hl) ? {} : #{highlight: hl})
     endif
   endfor
+  if empty(prop_type_get('mdview_heading'))
+    call prop_type_add('mdview_heading', #{highlight: 'MdviewHeading', combine: v:true})
+  endif
   augroup mdview_global
     autocmd!
     autocmd WinClosed * call s:close_popups(str2nr(expand('<amatch>')))
@@ -369,12 +374,14 @@ function! s:build_view(src, results) abort
   let rmap = []
   let anchors = []
   let props = []
+  let plain = []  " viewer lines copied from the source as they are
   let i = 1
   let n = len(src_lines)
   for r in a:results
     while i < r.start && i <= n
       call add(lines, src_lines[i - 1])
       call add(map, len(lines))
+      call add(plain, len(lines))
       call add(rmap, i)
       let i += 1
     endwhile
@@ -400,6 +407,7 @@ function! s:build_view(src, results) abort
       for k in range(r.start, r.end)
         call add(lines, src_lines[k - 1])
         call add(map, len(lines))
+        call add(plain, len(lines))
         call add(rmap, k)
       endfor
       let msg = 'mdview: ' . get(r, 'error', 'cannot draw')
@@ -412,10 +420,45 @@ function! s:build_view(src, results) abort
   while i <= n
     call add(lines, src_lines[i - 1])
     call add(map, len(lines))
+    call add(plain, len(lines))
     call add(rmap, i)
     let i += 1
   endwhile
+  call extend(props, s:heading_props(lines, plain))
   return #{lines: lines, map: map, rmap: rmap, anchors: anchors, props: props}
+endfunction
+
+" Bold text properties for the headings among the plain lines: ATX (# …)
+" and Setext (a line underlined with === or ---), outside fenced code.
+function! s:heading_props(lines, plain) abort
+  let props = []
+  let fence = ''
+  for idx in range(len(a:plain))
+    let lnum = a:plain[idx]
+    let t = a:lines[lnum - 1]
+    if empty(fence)
+      let m = matchstr(t, '^ \{0,3}\zs\(`\{3,}\|\~\{3,}\)')
+      if !empty(m)
+        let fence = m
+        continue
+      endif
+    else
+      let m = matchstr(t, '^ \{0,3}\zs[`~]\+\ze\s*$')
+      if !empty(m) && m ==# repeat(fence[0], len(m)) && len(m) >= len(fence)
+        let fence = ''
+      endif
+      continue
+    endif
+    if t =~# '^ \{0,3}#\{1,6}\%(\s\|$\)'
+      call add(props, [lnum, 'mdview_heading', max([1, len(t)])])
+    elseif t !~# '^\s*$' && idx + 1 < len(a:plain) && a:plain[idx + 1] == lnum + 1
+          \ && a:lines[lnum] =~# '^ \{0,3}\%(=\+\|-\+\)\s*$'
+          \ && t !~# '^ \{0,3}\%([-*+>]\|\d\+[.)]\)\%(\s\|$\)'
+          \ && t !~# '^ \{0,3}\%([-*_]\s*\)\{3,}$'
+      call add(props, [lnum, 'mdview_heading', len(t)])
+    endif
+  endfor
+  return props
 endfunction
 
 function! s:draw(src, state) abort
