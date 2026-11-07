@@ -11,6 +11,7 @@ require (
 	github.com/Shougo/goda.vim v0.7.2
 	github.com/lea/dal v0.0.0
 	github.com/lea/mermaid v0.0.0
+	github.com/yuin/goldmark v1.8.7
 	golang.org/x/image v0.47.0
 )
 

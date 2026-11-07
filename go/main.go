@@ -133,7 +133,13 @@ func (p *plugin) renderAll(ctx context.Context, req request) ([]result, error) {
 	}
 	st.Fonts = fonts
 
-	bs := blocks.Parse(req.Lines)
+	var bs []blocks.Block
+	for _, b := range blocks.Parse(req.Lines) {
+		// Only what the Vim side places so far: blocks that replace their lines.
+		if (b.Kind == blocks.Mermaid || b.Kind == blocks.Math || b.Kind == blocks.Image) && !b.Keep {
+			bs = append(bs, b)
+		}
+	}
 	results := make([]result, len(bs))
 	sem := make(chan struct{}, max(1, runtime.NumCPU()))
 	var wg sync.WaitGroup

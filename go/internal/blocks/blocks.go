@@ -1,140 +1,323 @@
-// Package blocks finds the parts of a Markdown document that mdview draws as
-// images: mermaid code blocks, display math and images on a line of their own.
+// Package blocks finds the parts of a Markdown document that mdview draws:
+// mermaid code blocks, display math, images, inline math, and the headings
+// it shows in bold. It parses with goldmark, so blocks inside quotes and
+// lists are found, and $$ inside code, HTML or comments is left alone.
 package blocks
 
 import (
-	"regexp"
+	"bytes"
+	"sort"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
+	"github.com/yuin/goldmark/text"
 )
 
-// Kind is what a block is drawn from.
+// Kind is what a block is.
 type Kind string
 
 const (
-	Mermaid Kind = "mermaid"
-	Math    Kind = "math"
-	Image   Kind = "image"
+	Mermaid    Kind = "mermaid"
+	Math       Kind = "math"
+	Image      Kind = "image"
+	Heading    Kind = "heading"     // not drawn; its lines are shown in bold
+	InlineMath Kind = "inline_math" // $…$ inside a line, shown as text
 )
 
-// Block is one drawable part of the document. Start and End are 1-based line
-// numbers, both inclusive, covering the whole block including its fences or
-// delimiters.
+// Block is one part of the document. Start and End are 1-based line
+// numbers, both inclusive.
+//
+// For Mermaid, Math and a drawn Image, the lines Start..End are the block's
+// source (with fences or delimiters) and are replaced by the image, unless
+// Keep is set: then the lines stay and the image goes below End (an image
+// inside a line of text).
+//
+// For InlineMath, Start == End is the line, and Col and ColEnd are the
+// 0-based byte range of the $…$ in that line.
 type Block struct {
 	Kind   Kind
 	Start  int
 	End    int
-	Source string // diagram or formula source (Mermaid, Math)
+	Source string // diagram or formula source
 	Path   string // image path or URL as written (Image)
 	Alt    string // alt text (Image)
+	Keep   bool   // keep the lines and put the image below them (Image)
+	Indent int    // columns the block is indented by (quotes, lists)
+	Col    int    // InlineMath: byte offset of $ in the line
+	ColEnd int    // InlineMath: byte offset after the closing $
 }
 
-var (
-	fenceOpen = regexp.MustCompile("^( {0,3})(`{3,}|~{3,})\\s*([^`\\s{]*)")
-	// An image alone on its line: ![alt](path) or ![alt](path "title").
-	imageLine = regexp.MustCompile(`^\s{0,3}!\[([^\]]*)\]\(\s*(<[^>]*>|[^\s)]+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)\s*$`)
+var md = goldmark.New(
+	goldmark.WithExtensions(extension.GFM, mathExtension{}),
+	goldmark.WithParserOptions(parser.WithAttribute()),
 )
 
-// Parse returns the blocks of lines in document order. Unclosed blocks are
-// ignored, as is anything inside other fenced code blocks.
+// doc is a parsed document with a map from byte offsets to lines.
+type doc struct {
+	src    []byte
+	starts []int // byte offset of the start of each line
+	lines  []string
+}
+
+// line returns the 1-based line holding byte offset off.
+func (d *doc) line(off int) int {
+	return sort.Search(len(d.starts), func(i int) bool { return d.starts[i] > off })
+}
+
+// col returns the 0-based byte column of off in its line.
+func (d *doc) col(off int) int {
+	return off - d.starts[d.line(off)-1]
+}
+
+// Parse returns the blocks of lines in document order (by Start). Unclosed
+// fences and math are not returned.
 func Parse(lines []string) []Block {
-	var out []Block
-	for i := 0; i < len(lines); i++ {
-		line := lines[i]
-		if m := fenceOpen.FindStringSubmatch(line); m != nil {
-			fence := m[2]
-			lang := strings.ToLower(m[3])
-			end := closingFence(lines, i+1, fence)
-			if end < 0 {
-				// CommonMark: an unclosed fence runs to the end of the document.
-				break
-			}
-			body := strings.Join(lines[i+1:end], "\n")
-			switch lang {
-			case "mermaid":
-				out = append(out, Block{Kind: Mermaid, Start: i + 1, End: end + 1, Source: body})
-			case "math", "latex", "tex", "katex":
-				out = append(out, Block{Kind: Math, Start: i + 1, End: end + 1, Source: body})
-			}
-			i = end
-			continue
-		}
-		if b, end, ok := displayMath(lines, i); ok {
-			out = append(out, b)
-			i = end
-			continue
-		}
-		if m := imageLine.FindStringSubmatch(line); m != nil {
-			p := strings.TrimSuffix(strings.TrimPrefix(m[2], "<"), ">")
-			out = append(out, Block{Kind: Image, Start: i + 1, End: i + 1, Path: p, Alt: m[1]})
+	d := &doc{lines: lines}
+	var b bytes.Buffer
+	for i, l := range lines {
+		d.starts = append(d.starts, b.Len())
+		b.WriteString(l)
+		if i < len(lines)-1 {
+			b.WriteByte('\n')
 		}
 	}
+	d.src = b.Bytes()
+	if len(lines) == 0 {
+		return nil
+	}
+	root := md.Parser().Parse(text.NewReader(d.src))
+
+	var out []Block
+	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		switch n := n.(type) {
+		case *ast.FencedCodeBlock:
+			if blk, ok := d.fenced(n); ok {
+				out = append(out, blk)
+			}
+			return ast.WalkSkipChildren, nil
+		case *MathBlock:
+			if n.Closed {
+				out = append(out, Block{Kind: Math, Start: d.line(n.Start), End: d.line(n.Last),
+					Source: string(n.Expr), Indent: d.col(n.Start)})
+			}
+			return ast.WalkSkipChildren, nil
+		case *ast.Heading:
+			if n.Lines().Len() > 0 {
+				first := n.Lines().At(0)
+				last := n.Lines().At(n.Lines().Len() - 1)
+				out = append(out, Block{Kind: Heading, Start: d.line(first.Start),
+					End: d.line(max(last.Start, last.Stop-1))})
+			}
+		case *ast.Image:
+			out = append(out, d.image(n))
+			return ast.WalkSkipChildren, nil
+		case *MathInline:
+			l := d.line(n.Start)
+			out = append(out, Block{Kind: InlineMath, Start: l, End: l, Source: n.Expr,
+				Col: d.col(n.Start), ColEnd: d.col(n.Start) + (n.Stop - n.Start)})
+		}
+		return ast.WalkContinue, nil
+	})
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Start < out[j].Start })
 	return out
 }
 
-// closingFence returns the index of the line closing a fence opened with
-// fence, searching from from, or -1.
-func closingFence(lines []string, from int, fence string) int {
-	ch := fence[:1]
-	for j := from; j < len(lines); j++ {
-		t := strings.TrimRight(lines[j], " \t")
-		lead := len(t) - len(strings.TrimLeft(t, " "))
-		if lead > 3 {
-			continue
-		}
-		t = t[lead:]
-		if len(t) >= len(fence) && strings.Trim(t, ch) == "" {
-			return j
-		}
+// fenced returns a mermaid or math code block, with the lines of its fences.
+func (d *doc) fenced(n *ast.FencedCodeBlock) (Block, bool) {
+	var kind Kind
+	switch strings.ToLower(string(n.Language(d.src))) {
+	case "mermaid":
+		kind = Mermaid
+	case "math", "latex", "tex", "katex":
+		kind = Math
+	default:
+		return Block{}, false
 	}
-	return -1
+	if n.Info == nil {
+		return Block{}, false
+	}
+	start := d.line(n.Info.Segment.Start)
+	opener := d.lines[start-1]
+	fi := strings.Index(opener, "```")
+	if j := strings.Index(opener, "~~~"); fi < 0 || (j >= 0 && j < fi) {
+		fi = j
+	}
+	if fi < 0 {
+		return Block{}, false
+	}
+	fence := opener[fi : fi+3]
+	end := start + 1
+	var body strings.Builder
+	segs := n.Lines()
+	for i := 0; i < segs.Len(); i++ {
+		s := segs.At(i)
+		body.WriteString(strings.Repeat(" ", s.Padding))
+		body.Write(s.Value(d.src))
+		end = d.line(max(s.Start, s.Stop-1)) + 1
+	}
+	// The closing fence must be there: an unclosed fence (or one cut off by
+	// the end of its quote or list item) is not drawn.
+	if end > len(d.lines) || !strings.Contains(d.lines[end-1], fence) ||
+		strings.Trim(strings.TrimLeft(d.lines[end-1], " \t>"), fence[:1]+" \t") != "" {
+		return Block{}, false
+	}
+	return Block{Kind: kind, Start: start, End: end,
+		Source: strings.TrimRight(body.String(), "\n"), Indent: fi}, true
 }
 
-// displayMath recognises $$…$$ and \[…\] that start a line, on one line or
-// spanning several. It returns the block and the index of its last line.
-func displayMath(lines []string, i int) (Block, int, bool) {
-	t := strings.TrimSpace(lines[i])
-	var open, close string
-	switch {
-	case strings.HasPrefix(t, "$$"):
-		open, close = "$$", "$$"
-	case strings.HasPrefix(t, `\[`):
-		open, close = `\[`, `\]`
-	default:
-		return Block{}, 0, false
+// image returns an image block. An image alone on its line (with other
+// images or a link around it) replaces the line; one inside text keeps the
+// line and goes below it.
+func (d *doc) image(n *ast.Image) Block {
+	off := d.inlineOffset(n)
+	l := d.line(off)
+	blk := Block{Kind: Image, Start: l, End: l, Path: string(n.Destination),
+		Alt: string(altText(n, d.src)), Keep: true}
+	if rest := d.withoutImages(n, l); strings.TrimSpace(rest) == "" {
+		blk.Keep = false
 	}
-	rest := t[len(open):]
-	if k := strings.Index(rest, close); k >= 0 {
-		// Single line: the closing delimiter must end the line.
-		if strings.TrimSpace(rest[k+len(close):]) != "" {
-			return Block{}, 0, false
+	// Indent: where the paragraph's text starts (after quote or list marks).
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Type() == ast.TypeBlock && p.Lines().Len() > 0 {
+			blk.Indent = d.col(p.Lines().At(0).Start)
+			break
 		}
-		src := strings.TrimSpace(rest[:k])
-		if src == "" {
-			return Block{}, 0, false
-		}
-		return Block{Kind: Math, Start: i + 1, End: i + 1, Source: src}, i, true
 	}
-	parts := []string{}
-	if s := strings.TrimSpace(rest); s != "" {
-		parts = append(parts, s)
+	return blk
+}
+
+// withoutImages returns line l with the images (and links holding only an
+// image) of n's paragraph removed, to tell whether anything else is on it.
+func (d *doc) withoutImages(n *ast.Image, l int) string {
+	line := d.lines[l-1]
+	start := d.starts[l-1]
+	para := n.Parent()
+	for para != nil && para.Type() != ast.TypeBlock {
+		para = para.Parent()
 	}
-	for j := i + 1; j < len(lines); j++ {
-		u := strings.TrimSpace(lines[j])
-		if u == "" {
-			// A blank line ends the paragraph: not display math.
-			return Block{}, 0, false
+	if para == nil {
+		return line
+	}
+	// Mark the bytes of this line that are text outside images.
+	keep := make([]bool, len(line))
+	mark := func(from, to int) {
+		for o := max(from, start); o < min(to, start+len(line)); o++ {
+			keep[o-start] = true
 		}
-		if strings.HasSuffix(u, close) {
-			if s := strings.TrimSpace(strings.TrimSuffix(u, close)); s != "" {
-				parts = append(parts, s)
+	}
+	var visit func(ast.Node, bool)
+	visit = func(c ast.Node, inImage bool) {
+		for ; c != nil; c = c.NextSibling() {
+			switch c := c.(type) {
+			case *ast.Image:
+				visit(c.FirstChild(), true)
+			case *ast.Link:
+				visit(c.FirstChild(), inImage || onlyImages(c))
+			case *ast.Text:
+				if !inImage {
+					mark(c.Segment.Start, c.Segment.Stop)
+				}
+			case *ast.RawHTML:
+				if !inImage {
+					for i := 0; i < c.Segments.Len(); i++ {
+						mark(c.Segments.At(i).Start, c.Segments.At(i).Stop)
+					}
+				}
+			case *MathInline:
+				if !inImage {
+					mark(c.Start, c.Stop)
+				}
+			default:
+				visit(c.FirstChild(), inImage)
 			}
-			src := strings.Join(parts, "\n")
-			if strings.TrimSpace(src) == "" {
-				return Block{}, 0, false
-			}
-			return Block{Kind: Math, Start: i + 1, End: j + 1, Source: src}, j, true
 		}
-		parts = append(parts, lines[j])
 	}
-	return Block{}, 0, false
+	visit(para.FirstChild(), false)
+	var b strings.Builder
+	for i, k := range keep {
+		if k {
+			b.WriteByte(line[i])
+		}
+	}
+	return b.String()
+}
+
+func onlyImages(link *ast.Link) bool {
+	has := false
+	for c := link.FirstChild(); c != nil; c = c.NextSibling() {
+		if _, ok := c.(*ast.Image); !ok {
+			return false
+		}
+		has = true
+	}
+	return has
+}
+
+// inlineOffset returns a byte offset on the line where inline node n is: its
+// first text, else the end of the text before it, else the start of the text
+// after it, else its block's first line.
+func (d *doc) inlineOffset(n ast.Node) int {
+	if off, ok := firstText(n); ok {
+		return off
+	}
+	for p := n; p != nil && p.Type() != ast.TypeBlock; p = p.Parent() {
+		for s := p.PreviousSibling(); s != nil; s = s.PreviousSibling() {
+			if off, ok := lastText(s); ok {
+				return off
+			}
+		}
+		for s := p.NextSibling(); s != nil; s = s.NextSibling() {
+			if off, ok := firstText(s); ok {
+				return off
+			}
+		}
+	}
+	for p := n; p != nil; p = p.Parent() {
+		if p.Type() == ast.TypeBlock && p.Lines().Len() > 0 {
+			return p.Lines().At(0).Start
+		}
+	}
+	return 0
+}
+
+func firstText(n ast.Node) (int, bool) {
+	if t, ok := n.(*ast.Text); ok {
+		return t.Segment.Start, true
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if off, ok := firstText(c); ok {
+			return off, true
+		}
+	}
+	return 0, false
+}
+
+func lastText(n ast.Node) (int, bool) {
+	if t, ok := n.(*ast.Text); ok {
+		return max(t.Segment.Start, t.Segment.Stop-1), true
+	}
+	for c := n.LastChild(); c != nil; c = c.PreviousSibling() {
+		if off, ok := lastText(c); ok {
+			return off, true
+		}
+	}
+	return 0, false
+}
+
+func altText(n ast.Node, src []byte) []byte {
+	var b []byte
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if t, ok := c.(*ast.Text); ok {
+			b = append(b, t.Segment.Value(src)...)
+		} else {
+			b = append(b, altText(c, src)...)
+		}
+	}
+	return b
 }
