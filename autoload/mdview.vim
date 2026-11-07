@@ -554,7 +554,7 @@ function! s:make_popups(win, src, state) abort
           \ scrollbar: 0,
           \ }, s:popup_opts(a:win, a, mode))
     try
-      call add(items, #{pid: popup_create('', opts), anchor: a, mode: mode})
+      call add(items, #{pid: popup_create('', opts), anchor: a, mode: mode, img: img})
     catch
       call s:warn(v:exception)
     endtry
@@ -568,7 +568,10 @@ function! s:update_modes(win) abort
     let mode = s:mode(a:win, it.anchor)
     if mode !=# it.mode
       let it.mode = mode
-      call popup_setoptions(it.pid, s:popup_opts(a:win, it.anchor, mode))
+      " popup_setoptions() drops the image of a popup when its text property
+      " changes, so give it again.
+      call popup_setoptions(it.pid, extend(s:popup_opts(a:win, it.anchor, mode),
+            \ #{image: #{id: it.img}}))
     endif
   endfor
 endfunction
