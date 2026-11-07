@@ -1,7 +1,8 @@
 # mdview
 
-Vim の画像表示機能（`+image` の popup image）を使い、Markdown バッファの中に
-mermaid・ディスプレイ数式・画像を描くプラグインです。
+Vim の画像表示機能（`+image` の popup image）を使い、mermaid・ディスプレイ数式・画像を
+描いた状態で Markdown を読めるビューアです。`:Mdview` で右に（`:Mdview here` で同じウィンドウに）
+開きます。Markdown のファイル自体は普段どおりのエディタで開きます。
 
 - mermaid: [dam](../dam)（pure Go）
 - 数式: [dal](../dal)（pure Go）
@@ -12,7 +13,6 @@ mermaid・ディスプレイ数式・画像を描くプラグインです。
 ```vim
 set runtimepath+=~/vim_markdown_viewer/deps/goda.vim
 set runtimepath+=~/vim_markdown_viewer/mdview
-filetype plugin on
 ```
 
 Vim で `:MdviewBuild` を実行します（または `cd go && go build -o ../bin/mdview .`）。
@@ -22,8 +22,8 @@ Vim で `:MdviewBuild` を実行します（または `cd go && go build -o ../b
 ## 構成
 
 ```
-plugin/mdview.vim     コマンドと自動有効化
-autoload/mdview.vim   仮想行・popup・fold の制御
+plugin/mdview.vim     コマンド
+autoload/mdview.vim   ビューアバッファ・popup・スクロールの追従
 go/                   goda プラグイン（ブロック抽出・描画・キャッシュ）
 doc/mdview.txt        ヘルプ
 testdata/             確認用の Markdown

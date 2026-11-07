@@ -1,20 +1,23 @@
-" mdview - draw mermaid, math and images inside Markdown buffers.
+" mdview - a viewer for Markdown with mermaid, math and images drawn.
 "
-" The Go binary (bin/mdview, a goda.vim plugin) finds the blocks of a buffer,
-" draws them into raw RGB files and calls mdview#apply() with the results.
-" Here each block gets:
-"   - blank virtual lines (text properties) as tall as its image,
-"   - a popup showing the image, anchored to a text property so that it
-"     follows scrolling,
-"   - a closed manual fold over its source, opened while the cursor is in it.
-" Images on a line of their own are shown below that line and not folded.
+" :Mdview opens a read-only viewer buffer for the current Markdown buffer (the
+" source), to the right or in the same window. The source itself is left
+" alone.
+"
+" The Go binary (bin/mdview, a goda.vim plugin) finds the blocks of the
+" source, draws them into raw RGB files and calls mdview#apply() with the
+" results. The viewer gets the source's lines, with each drawn block replaced
+" by as many empty lines as its image is tall, and a popup showing the image
+" over those lines. The popup is anchored to a text property on the last of
+" them (or on the first while the last is below the window), so it follows
+" scrolling and is clipped at the window's edges.
 
 let s:root = expand('<sfile>:p:h:h')
 " Must equal scriptVersion in go/main.go.
 let s:script_version = 1
 
 let s:images = {}     " cache key -> image id (image_add())
-let s:popups = {}     " winid -> {bufnr, gen, ids}
+let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
 let s:next_id = 1     " text property ids, unique over all buffers
 let s:pruned = 0
 let s:resize_timer = 0
@@ -53,7 +56,7 @@ function! s:init() abort
   call goda#register('mdview', s:bin(), #{version: s:script_version})
   highlight default link MdviewText Normal
   highlight default link MdviewError ErrorMsg
-  for [name, hl] in [['mdview_pad', ''], ['mdview_anchor', ''],
+  for [name, hl] in [['mdview_anchor', ''], ['mdview_anchor_end', ''],
         \ ['mdview_text', 'MdviewText'], ['mdview_error', 'MdviewError']]
     if empty(prop_type_get(name))
       call prop_type_add(name, empty(hl) ? {} : #{highlight: hl})
@@ -63,6 +66,7 @@ function! s:init() abort
     autocmd!
     autocmd WinClosed * call s:close_popups(str2nr(expand('<amatch>')))
     autocmd BufWinEnter,WinEnter,BufWinLeave * call timer_start(0, {-> s:sync_all()})
+    autocmd WinScrolled * call s:on_scrolled()
     autocmd WinResized * call s:on_resized()
     autocmd ColorScheme * call s:refresh_all()
     autocmd OptionSet background call s:refresh_all()
@@ -75,72 +79,168 @@ function! s:init() abort
 endfunction
 
 " ---------------------------------------------------------------------------
-" Commands
+" Sources and viewers
 
-function! mdview#enable(...) abort
-  let bufnr = a:0 ? a:1 : bufnr('%')
+" The source buffer of bufnr: itself, or the source of a viewer.
+function! s:source_of(bufnr) abort
+  let src = getbufvar(a:bufnr, 'mdview_source', 0)
+  return src > 0 ? src : a:bufnr
+endfunction
+
+" The state of a source with an open viewer, or {}.
+function! s:state(src) abort
+  let state = getbufvar(a:src, 'mdview', {})
+  if empty(state) || !bufexists(state.viewer)
+    return {}
+  endif
+  return state
+endfunction
+
+function! mdview#complete(arglead, cmdline, pos) abort
+  return filter(['right', 'here'], {_, v -> v =~# '^' . a:arglead})
+endfunction
+
+" :Mdview [right|here]: open the viewer of the current buffer, or close it
+" when it is open (or when the current buffer is a viewer).
+function! mdview#open(...) abort
+  let where = a:0 && !empty(a:1) ? a:1 : get(g:, 'mdview_open', 'right')
+  if index(['right', 'here'], where) < 0
+    call s:warn('unknown place: ' . where . ' (right or here)')
+    return
+  endif
+  let src = s:source_of(bufnr('%'))
+  if !empty(s:state(src))
+    call mdview#close(src)
+    return
+  endif
+  if !empty(&l:buftype)
+    call s:warn('not a file buffer')
+    return
+  endif
   if !s:init()
     return
   endif
-  if !empty(getbufvar(bufnr, 'mdview', {}))
-    call mdview#refresh(bufnr)
-    return
-  endif
-  call setbufvar(bufnr, 'mdview', #{results: [], gen: 0, tick: -1})
-  execute 'augroup mdview_buf_' . bufnr
-    autocmd!
-    execute 'autocmd BufWritePost <buffer=' . bufnr . '> call mdview#refresh(' . bufnr . ')'
-    execute 'autocmd CursorMoved,CursorMovedI <buffer=' . bufnr . '> call s:on_cursor()'
-    execute 'autocmd BufWipeout <buffer=' . bufnr . '> call s:forget(' . bufnr . ')'
-  augroup END
-  " Not at once: FileType runs while the buffer is still being set up.
-  call timer_start(0, {-> mdview#refresh(bufnr)})
-endfunction
 
-function! mdview#disable(...) abort
-  let bufnr = a:0 ? a:1 : bufnr('%')
-  if empty(getbufvar(bufnr, 'mdview', {}))
-    return
+  let name = 'mdview://' . (empty(bufname(src)) ? '[No Name ' . src . ']' : fnamemodify(bufname(src), ':p'))
+  if bufexists(name)
+    silent! execute 'bwipeout!' bufnr(name)
   endif
-  call s:clear(bufnr)
-  for win in win_findbuf(bufnr)
-    call win_execute(win, 'call s:restore_folds()')
-  endfor
-  execute 'augroup mdview_buf_' . bufnr
-    autocmd!
-  augroup END
-  execute 'augroup! mdview_buf_' . bufnr
-  call setbufvar(bufnr, 'mdview', {})
-  call s:discard_unused()
-endfunction
-
-function! mdview#toggle() abort
-  if empty(get(b:, 'mdview', {}))
-    call mdview#enable()
+  let lnum = line('.')
+  let state = #{viewer: 0, results: [], map: [], rmap: [], gen: 0, tick: -1,
+        \ here: where ==# 'here', bufhidden: getbufvar(src, '&bufhidden')}
+  if where ==# 'here'
+    " The source stays loaded (with its changes) while the viewer is shown.
+    call setbufvar(src, '&bufhidden', 'hide')
+    enew
   else
-    call mdview#disable()
+    vertical botright new
   endif
+  let viewer = bufnr('%')
+  setlocal buftype=nofile bufhidden=wipe noswapfile nobuflisted
+  silent execute 'file' fnameescape(name)
+  setlocal filetype=markdown
+  setlocal nofoldenable nonumber norelativenumber nolist signcolumn=no
+  setlocal wrap linebreak conceallevel=2
+  let b:mdview_source = src
+  call setbufline(viewer, 1, getbufline(src, 1, '$'))
+  setlocal nomodifiable nomodified
+  call cursor(lnum, 1)
+  nnoremap <buffer><silent> q <Cmd>call mdview#close()<CR>
+  execute 'augroup mdview_view_' . viewer
+    autocmd!
+    execute 'autocmd BufWipeout <buffer=' . viewer . '> call s:detach(' . src . ')'
+  augroup END
+
+  let state.viewer = viewer
+  let state.map = range(1, line('$'))
+  let state.rmap = range(1, line('$'))
+  call setbufvar(src, 'mdview', state)
+  execute 'augroup mdview_src_' . src
+    autocmd!
+    execute 'autocmd BufWritePost <buffer=' . src . '> call mdview#refresh(' . src . ')'
+    execute 'autocmd CursorMoved,CursorMovedI <buffer=' . src . '> call s:follow(' . src . ')'
+    execute 'autocmd BufWipeout <buffer=' . src . '> call mdview#close(' . src . ')'
+  augroup END
+  if where ==# 'right'
+    wincmd p
+  endif
+  call mdview#refresh(src)
 endfunction
 
-function! mdview#is_enabled(...) abort
-  return !empty(getbufvar(a:0 ? a:1 : bufnr('%'), 'mdview', {}))
+" Close the viewer of a source (default: the current buffer's).
+function! mdview#close(...) abort
+  let src = a:0 ? a:1 : s:source_of(bufnr('%'))
+  let state = s:state(src)
+  if empty(state)
+    return
+  endif
+  let viewer = state.viewer
+  if state.here && bufexists(src)
+    " Put the source back in the windows showing the viewer, at the line the
+    " viewer was at.
+    for win in win_findbuf(viewer)
+      let vl = getcurpos(win)[1]
+      let sl = get(state.rmap, vl - 1, 1)
+      call win_execute(win, 'buffer ' . src . ' | call cursor(' . sl . ', 1)')
+    endfor
+  endif
+  if bufexists(viewer)
+    for win in win_findbuf(viewer)
+      if winnr('$') > 1
+        call win_execute(win, 'close')
+      endif
+    endfor
+    silent! execute 'bwipeout!' viewer
+  endif
+  call s:detach(src)
 endfunction
 
-" Ask the binary to draw the buffer; it calls mdview#apply() when done.
+" Forget the viewer of src: popups, autocommands and state.
+function! s:detach(src) abort
+  let state = getbufvar(a:src, 'mdview', {})
+  if empty(state)
+    return
+  endif
+  for [win, p] in items(s:popups)
+    if p.src == a:src
+      call s:close_popups(str2nr(win))
+    endif
+  endfor
+  execute 'augroup mdview_src_' . a:src
+    autocmd!
+  augroup END
+  execute 'augroup! mdview_src_' . a:src
+  if exists('#mdview_view_' . state.viewer)
+    execute 'augroup mdview_view_' . state.viewer
+      autocmd!
+    augroup END
+    execute 'augroup! mdview_view_' . state.viewer
+  endif
+  if bufexists(a:src)
+    if state.here
+      call setbufvar(a:src, '&bufhidden', state.bufhidden)
+    endif
+    call setbufvar(a:src, 'mdview', {})
+  endif
+  call timer_start(0, {-> s:discard_unused()})
+endfunction
+
+" Ask the binary to draw the source; it calls mdview#apply() when done.
 function! mdview#refresh(...) abort
-  let bufnr = a:0 ? a:1 : bufnr('%')
-  if !mdview#is_enabled(bufnr) || !s:init()
+  let src = a:0 ? a:1 : s:source_of(bufnr('%'))
+  let state = s:state(src)
+  if empty(state) || !s:init()
     return
   endif
   if !executable(s:bin())
     call s:warn('the binary is not built: run :MdviewBuild')
     return
   endif
-  let wins = win_findbuf(bufnr)
+  let wins = win_findbuf(state.viewer)
   if empty(wins)
     return
   endif
-  let win = index(wins, win_getid()) >= 0 ? win_getid() : wins[0]
+  let win = wins[0]
   let cell = s:cell_pixels()
   let info = getwininfo(win)[0]
   let cols = info.width - info.textoff
@@ -155,14 +255,11 @@ function! mdview#refresh(...) abort
     let rows = min([rows, max_height])
   endif
   let [bg, fg] = s:colors()
-  let dir = fnamemodify(bufname(bufnr), ':p:h')
-  if empty(bufname(bufnr))
-    let dir = getcwd()
-  endif
+  let dir = empty(bufname(src)) ? getcwd() : fnamemodify(bufname(src), ':p:h')
   let req = #{
-        \ bufnr: bufnr,
-        \ tick: getbufvar(bufnr, 'changedtick'),
-        \ lines: getbufline(bufnr, 1, '$'),
+        \ bufnr: src,
+        \ tick: getbufvar(src, 'changedtick'),
+        \ lines: getbufline(src, 1, '$'),
         \ dir: dir,
         \ cache_dir: s:cache_dir(),
         \ cell: cell,
@@ -177,7 +274,6 @@ function! mdview#refresh(...) abort
         \ font_bold: expand(get(g:, 'mdview_font_bold', '')),
         \ font_bold_index: get(g:, 'mdview_font_bold_index', 0),
         \ }
-  let state = getbufvar(bufnr, 'mdview')
   let state.width = info.width
   let state.colors = [bg, fg]
   try
@@ -244,169 +340,210 @@ endfunction
 
 " Called by the binary. results: [{kind, start, end, key, path, w, h, rows,
 " text, error}], ordered by start.
-function! mdview#apply(bufnr, tick, results) abort
-  if !bufexists(a:bufnr) || !mdview#is_enabled(a:bufnr)
+function! mdview#apply(src, tick, results) abort
+  let state = s:state(a:src)
+  if empty(state)
     return
   endif
-  let state = getbufvar(a:bufnr, 'mdview')
-  if getbufvar(a:bufnr, 'changedtick') != a:tick
-    " Changed while drawing: the line numbers may be stale. Ask again, but
-    " not forever while the user keeps typing.
+  if getbufvar(a:src, 'changedtick') != a:tick
+    " Changed while drawing: ask again, but not forever while typing.
     let state.retry = get(state, 'retry', 0) + 1
     if state.retry <= 3
-      call mdview#refresh(a:bufnr)
+      call mdview#refresh(a:src)
     endif
     return
   endif
   let state.retry = 0
   let state.results = a:results
   let state.tick = a:tick
-  call s:draw(a:bufnr)
+  call s:draw(a:src, state)
 endfunction
 
-function! s:draw(bufnr) abort
-  call s:clear(a:bufnr)
-  let state = getbufvar(a:bufnr, 'mdview')
-  let state.gen += 1
-  let state.folds = []
-  let last = getbufinfo(a:bufnr)[0].linecount
-  let folded = {}
-  for r in state.results
-    if r.kind !=# 'image' && (!empty(get(r, 'path', '')) || !empty(get(r, 'text', [])))
-      let folded[r.start] = 1
-    endif
-  endfor
-  for r in state.results
-    let r.id = s:next_id
-    let s:next_id += 1
-    let has_image = !empty(get(r, 'path', ''))
-    let lines = []
-    let hl = 'mdview_pad'
-    if has_image
-      let lines = repeat([' '], r.rows)
+" Build the viewer's lines from the source and the results.
+" Returns {lines, map, rmap, anchors, props}: map[i] is the viewer line of
+" source line i+1, rmap[j] the source line of viewer line j+1.
+function! s:build_view(src, results) abort
+  let src_lines = getbufline(a:src, 1, '$')
+  let lines = []
+  let map = []
+  let rmap = []
+  let anchors = []
+  let props = []
+  let i = 1
+  let n = len(src_lines)
+  for r in a:results
+    while i < r.start && i <= n
+      call add(lines, src_lines[i - 1])
+      call add(map, len(lines))
+      call add(rmap, i)
+      let i += 1
+    endwhile
+    let first = len(lines) + 1
+    if !empty(get(r, 'path', ''))
+      let rows = max([1, r.rows])
+      call extend(lines, repeat([''], rows))
+      call extend(rmap, repeat([r.start], rows))
+      let s:next_id += 1
+      call add(anchors, #{id: s:next_id, key: r.key, path: r.path, w: r.w, h: r.h,
+            \ first: first, last: first + rows - 1})
+      call extend(map, repeat([first], r.end - r.start + 1))
     elseif !empty(get(r, 'text', []))
-      let lines = map(copy(r.text), {_, v -> empty(v) ? ' ' : v})
-      let hl = 'mdview_text'
-    elseif !empty(get(r, 'error', ''))
-      let lines = ['mdview: ' . r.error]
-      let hl = 'mdview_error'
-    endif
-    let fold = r.kind !=# 'image' && hl !=# 'mdview_error'
-    " Where the virtual lines go: above the line after the block, unless that
-    " line is folded itself (hidden) or there is none; then below its last line.
-    let below_next = r.end + 1
-    if r.kind ==# 'image' || r.end >= last || has_key(folded, below_next)
-      let r.place = 'below'
-      let r.anchor = r.end
-      if fold && r.kind !=# 'image'
-        if r.end - 1 >= r.start
-          call add(state.folds, [r.start, r.end - 1])
+      for t in r.text
+        call add(lines, t)
+        call add(rmap, r.start)
+        if !empty(t)
+          call add(props, [len(lines), 'mdview_text', len(t)])
         endif
-      endif
+      endfor
+      call extend(map, repeat([first], r.end - r.start + 1))
     else
-      let r.place = 'above'
-      let r.anchor = below_next
-      if fold
-        call add(state.folds, [r.start, r.end])
-      endif
+      for k in range(r.start, r.end)
+        call add(lines, src_lines[k - 1])
+        call add(map, len(lines))
+        call add(rmap, k)
+      endfor
+      let msg = 'mdview: ' . get(r, 'error', 'cannot draw')
+      call add(lines, msg)
+      call add(rmap, r.end)
+      call add(props, [len(lines), 'mdview_error', len(msg)])
     endif
-    for l in lines
-      call prop_add(r.anchor, 0, #{bufnr: a:bufnr, type: hl, text: l,
-            \ text_align: r.place, text_wrap: 'truncate'})
-    endfor
-    if has_image
-      call prop_add(r.anchor, 1, #{bufnr: a:bufnr, type: 'mdview_anchor',
-            \ id: r.id, length: 0})
+    let i = r.end + 1
+  endfor
+  while i <= n
+    call add(lines, src_lines[i - 1])
+    call add(map, len(lines))
+    call add(rmap, i)
+    let i += 1
+  endwhile
+  return #{lines: lines, map: map, rmap: rmap, anchors: anchors, props: props}
+endfunction
+
+function! s:draw(src, state) abort
+  let viewer = a:state.viewer
+  " Where each viewer window is, as a source line, to come back to it.
+  let views = {}
+  for win in win_findbuf(viewer)
+    let info = getwininfo(win)[0]
+    let views[win] = #{top: get(a:state.rmap, info.topline - 1, 1),
+          \ cur: get(a:state.rmap, getcurpos(win)[1] - 1, 1)}
+  endfor
+  for [win, p] in items(s:popups)
+    if p.src == a:src
+      call s:close_popups(str2nr(win))
     endif
   endfor
-  call s:sync(a:bufnr)
+
+  let v = s:build_view(a:src, a:state.results)
+  call setbufvar(viewer, '&modifiable', 1)
+  silent call deletebufline(viewer, 1, '$')
+  call setbufline(viewer, 1, v.lines)
+  for [lnum, type, len] in v.props
+    call prop_add(lnum, 1, #{bufnr: viewer, type: type, length: len})
+  endfor
+  for a in v.anchors
+    call prop_add(a.first, 1, #{bufnr: viewer, type: 'mdview_anchor', id: a.id, length: 0})
+    call prop_add(a.last, 1, #{bufnr: viewer, type: 'mdview_anchor_end', id: a.id, length: 0})
+  endfor
+  call setbufvar(viewer, '&modifiable', 0)
+  call setbufvar(viewer, '&modified', 0)
+  let a:state.map = v.map
+  let a:state.rmap = v.rmap
+  let a:state.anchors = v.anchors
+  let a:state.gen += 1
+
+  for [win, pos] in items(views)
+    let top = get(v.map, pos.top - 1, 1)
+    let cur = get(v.map, pos.cur - 1, 1)
+    call win_execute(str2nr(win), 'call winrestview(#{topline: ' . top . ', lnum: ' . cur . ', col: 0})')
+  endfor
+  call s:sync(a:src)
+  if bufnr('%') == a:src
+    call s:follow(a:src)
+  endif
   call s:discard_unused()
 endfunction
 
-" Remove everything drawn for bufnr: text properties, popups and folds.
-function! s:clear(bufnr) abort
-  if !bufexists(a:bufnr)
+" ---------------------------------------------------------------------------
+" Following the source's cursor
+
+function! s:follow(src) abort
+  let state = s:state(a:src)
+  if empty(state) || bufnr('%') != a:src || state.here
     return
   endif
-  for t in ['mdview_pad', 'mdview_anchor', 'mdview_text', 'mdview_error']
-    call prop_remove(#{type: t, bufnr: a:bufnr, all: 1})
+  let vl = get(state.map, line('.') - 1, get(state.map, -1, 1))
+  for win in win_findbuf(state.viewer)
+    let height = winheight(win)
+    let off = min([winline() - 1, height - 1])
+    let top = max([1, vl - off])
+    call win_execute(win, 'call winrestview(#{topline: ' . top . ', lnum: ' . vl . ', col: 0})')
+    call s:update_modes(win)
   endfor
-  for [win, p] in items(s:popups)
-    if p.bufnr == a:bufnr
-      call s:close_popups(str2nr(win))
-    endif
-  endfor
-  for win in win_findbuf(a:bufnr)
-    if getwinvar(win, 'mdview_gen', -1) >= 0
-      call win_execute(win, 'silent! normal! zE')
-      call setwinvar(win, 'mdview_gen', -1)
-    endif
-  endfor
-endfunction
-
-function! s:forget(bufnr) abort
-  for [win, p] in items(s:popups)
-    if p.bufnr == a:bufnr
-      call s:close_popups(str2nr(win))
-    endif
-  endfor
-  call timer_start(0, {-> s:discard_unused()})
 endfunction
 
 " ---------------------------------------------------------------------------
-" Windows: popups and folds
+" Popups
 
 function! s:sync_all() abort
   for win in keys(s:popups)
     let w = str2nr(win)
-    if win_id2win(w) == 0 || winbufnr(w) != s:popups[win].bufnr
+    let state = s:state(s:popups[win].src)
+    if win_id2win(w) == 0 || empty(state) || winbufnr(w) != state.viewer
       call s:close_popups(w)
     endif
   endfor
   for b in getbufinfo(#{bufloaded: 1})
-    if mdview#is_enabled(b.bufnr) && !empty(b.windows)
+    if !empty(s:state(b.bufnr))
       call s:sync(b.bufnr)
     endif
   endfor
 endfunction
 
-" Make sure every window showing bufnr has the popups and folds of its
+" Make sure every window showing the viewer of src has the popups of its
 " current drawing.
-function! s:sync(bufnr) abort
-  let state = getbufvar(a:bufnr, 'mdview', {})
+function! s:sync(src) abort
+  let state = s:state(a:src)
   if empty(state) || state.gen == 0
     return
   endif
-  for win in win_findbuf(a:bufnr)
+  for win in win_findbuf(state.viewer)
     let p = get(s:popups, win, {})
-    if empty(p) || p.bufnr != a:bufnr || p.gen != state.gen
+    if empty(p) || p.src != a:src || p.gen != state.gen
       call s:close_popups(win)
-      call s:make_popups(win, a:bufnr, state)
-    endif
-    if getwinvar(win, 'mdview_gen', -1) != state.gen
-      call win_execute(win, 'call s:make_folds(' . a:bufnr . ')')
+      call s:make_popups(win, a:src, state)
     endif
   endfor
 endfunction
 
-function! s:make_popups(win, bufnr, state) abort
-  let ids = []
-  for r in a:state.results
-    if empty(get(r, 'path', ''))
-      continue
-    endif
-    let img = s:image_id(r)
+" Which anchor a popup uses: 'end' (bottom of the image on its last line;
+" the top is clipped when it scrolls past the window's top) unless the last
+" line is below the window, then 'start'.
+function! s:mode(win, a) abort
+  let info = getwininfo(a:win)[0]
+  if a:a.last > info.botline && a:a.first >= info.topline
+    return 'start'
+  endif
+  return 'end'
+endfunction
+
+function! s:popup_opts(win, a, mode) abort
+  return a:mode ==# 'start'
+        \ ? #{textprop: 'mdview_anchor', textpropid: a:a.id, textpropwin: a:win,
+        \     pos: 'topleft', line: -1, col: 0}
+        \ : #{textprop: 'mdview_anchor_end', textpropid: a:a.id, textpropwin: a:win,
+        \     pos: 'botleft', line: 1, col: 0}
+endfunction
+
+function! s:make_popups(win, src, state) abort
+  let items = []
+  for a in get(a:state, 'anchors', [])
+    let img = s:image_id(a)
     if img < 0
       continue
     endif
-    let opts = #{
+    let mode = s:mode(a:win, a)
+    let opts = extend(#{
           \ image: #{id: img},
-          \ textprop: 'mdview_anchor',
-          \ textpropid: r.id,
-          \ textpropwin: a:win,
-          \ pos: r.place ==# 'above' ? 'botleft' : 'topleft',
-          \ line: 0,
-          \ col: 0,
           \ posinvert: 0,
           \ clipwindow: 1,
           \ fixed: 1,
@@ -415,14 +552,31 @@ function! s:make_popups(win, bufnr, state) abort
           \ padding: [0, 0, 0, 0],
           \ border: [0, 0, 0, 0],
           \ scrollbar: 0,
-          \ }
+          \ }, s:popup_opts(a:win, a, mode))
     try
-      call add(ids, popup_create('', opts))
+      call add(items, #{pid: popup_create('', opts), anchor: a, mode: mode})
     catch
       call s:warn(v:exception)
     endtry
   endfor
-  let s:popups[a:win] = #{bufnr: a:bufnr, gen: a:state.gen, ids: ids}
+  let s:popups[a:win] = #{src: a:src, gen: a:state.gen, items: items}
+endfunction
+
+function! s:update_modes(win) abort
+  let p = get(s:popups, a:win, {})
+  for it in get(p, 'items', [])
+    let mode = s:mode(a:win, it.anchor)
+    if mode !=# it.mode
+      let it.mode = mode
+      call popup_setoptions(it.pid, s:popup_opts(a:win, it.anchor, mode))
+    endif
+  endfor
+endfunction
+
+function! s:on_scrolled() abort
+  for win in keys(s:popups)
+    call s:update_modes(str2nr(win))
+  endfor
 endfunction
 
 function! s:close_popups(win) abort
@@ -430,41 +584,39 @@ function! s:close_popups(win) abort
   if empty(p)
     return
   endif
-  for id in p.ids
-    call popup_close(id)
+  for it in p.items
+    call popup_close(it.pid)
   endfor
   call remove(s:popups, a:win)
 endfunction
 
-function! s:image_id(r) abort
-  let id = get(s:images, a:r.key, -1)
+function! s:image_id(a) abort
+  let id = get(s:images, a:a.key, -1)
   if id >= 0
     return id
   endif
   try
-    let data = readblob(a:r.path)
-    if len(data) != a:r.w * a:r.h * 3
-      throw 'bad image file ' . a:r.path
+    let data = readblob(a:a.path)
+    if len(data) != a:a.w * a:a.h * 3
+      throw 'bad image file ' . a:a.path
     endif
-    let id = image_add(#{data: data, width: a:r.w, height: a:r.h})
+    let id = image_add(#{data: data, width: a:a.w, height: a:a.h})
   catch
     call s:warn(v:exception)
     return -1
   endtry
-  let s:images[a:r.key] = id
+  let s:images[a:a.key] = id
   return id
 endfunction
 
-" Discard the images no buffer uses any more. Popups keep their own
+" Discard the images no viewer uses any more. Popups keep their own
 " reference, so this is safe while they are open.
 function! s:discard_unused() abort
   let used = {}
   for b in getbufinfo()
     let state = getbufvar(b.bufnr, 'mdview', {})
-    for r in get(state, 'results', [])
-      if !empty(get(r, 'key', ''))
-        let used[r.key] = 1
-      endif
+    for a in get(state, 'anchors', [])
+      let used[a.key] = 1
     endfor
   endfor
   for key in keys(s:images)
@@ -473,82 +625,6 @@ function! s:discard_unused() abort
       call remove(s:images, key)
     endif
   endfor
-endfunction
-
-" Runs in the window (win_execute()).
-function! s:make_folds(bufnr) abort
-  let state = getbufvar(a:bufnr, 'mdview')
-  if !exists('w:mdview_saved')
-    let w:mdview_saved = #{fdm: &l:foldmethod, fen: &l:foldenable,
-          \ fdt: &l:foldtext, fml: &l:foldminlines, fdl: &l:foldlevel,
-          \ fcs: &l:fillchars}
-  endif
-  setlocal foldmethod=manual foldenable foldminlines=0 foldlevel=0
-  setlocal foldtext=mdview#foldtext()
-  let &l:fillchars = (empty(&l:fillchars) ? &g:fillchars : &l:fillchars)
-        \ ->substitute('\%(^\|,\)fold:[^,]*', '', '') . ',fold: '
-  let &l:fillchars = substitute(&l:fillchars, '^,', '', '')
-  silent! normal! zE
-  let cur = line('.')
-  for [s, e] in get(state, 'folds', [])
-    execute s . ',' . e . 'fold'
-    if s <= cur && cur <= e
-      execute s . 'foldopen'
-    endif
-  endfor
-  let w:mdview_gen = state.gen
-endfunction
-
-function! s:restore_folds() abort
-  silent! normal! zE
-  if exists('w:mdview_saved')
-    let s = w:mdview_saved
-    let &l:foldmethod = s.fdm
-    let &l:foldenable = s.fen
-    let &l:foldtext = s.fdt
-    let &l:foldminlines = s.fml
-    let &l:foldlevel = s.fdl
-    let &l:fillchars = s.fcs
-    unlet w:mdview_saved
-  endif
-  silent! unlet w:mdview_gen
-endfunction
-
-function! mdview#foldtext() abort
-  let state = get(b:, 'mdview', {})
-  let kind = 'block'
-  for r in get(state, 'results', [])
-    if r.start == v:foldstart
-      let kind = r.kind
-      break
-    endif
-  endfor
-  let n = v:foldend - v:foldstart + 1
-  return printf('%s %s (%d line%s)', get(g:, 'mdview_fold_marker', '▸'), kind, n, n == 1 ? '' : 's')
-endfunction
-
-" Open the fold of the block under the cursor, close the others.
-function! s:on_cursor() abort
-  if getwinvar(0, 'mdview_gen', -1) < 0
-    return
-  endif
-  let lnum = line('.')
-  let prev = get(w:, 'mdview_lastline', lnum)
-  let w:mdview_lastline = lnum
-  if foldclosed(lnum) != -1
-    let fe = foldclosedend(lnum)
-    let col = col('.')
-    execute lnum . 'foldopen'
-    if prev > fe
-      " Came up from below: start at the bottom of the block.
-      call cursor(fe, col)
-      let w:mdview_lastline = fe
-    endif
-    let w:mdview_open = 1
-  elseif get(w:, 'mdview_open', 0) && foldlevel(lnum) == 0
-    silent! %foldclose
-    let w:mdview_open = 0
-  endif
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -637,39 +713,39 @@ function! s:osc_rgb(resp) abort
   return map(m[1:3], {_, h -> str2nr(h, 16) * 255 / (pow(16, len(h))->float2nr() - 1)})
 endfunction
 
-" Draw again with the terminal's colors once it has told them.
-function! s:on_term_colors() abort
-  let colors = s:colors()
-  for b in getbufinfo(#{bufloaded: 1})
-    let state = getbufvar(b.bufnr, 'mdview', {})
-    if !empty(state) && get(state, 'colors', []) != colors
-      call mdview#refresh(b.bufnr)
-    endif
-  endfor
+function! s:sources() abort
+  return filter(map(getbufinfo(#{bufloaded: 1}), {_, b -> b.bufnr}),
+        \ {_, b -> !empty(s:state(b))})
 endfunction
 
 function! s:refresh_all() abort
-  for b in getbufinfo(#{bufloaded: 1})
-    if mdview#is_enabled(b.bufnr)
-      call mdview#refresh(b.bufnr)
+  for src in s:sources()
+    call mdview#refresh(src)
+  endfor
+endfunction
+
+" Draw again with the terminal's colors once it has told them.
+function! s:on_term_colors() abort
+  let colors = s:colors()
+  for src in s:sources()
+    if get(s:state(src), 'colors', []) != colors
+      call mdview#refresh(src)
     endif
   endfor
 endfunction
 
-" Redraw buffers whose window width changed (the images fit the width).
+" Draw again when a viewer's width changed (the images fit the width).
 function! s:on_resized() abort
   call timer_stop(s:resize_timer)
   let s:resize_timer = timer_start(300, {-> s:resized()})
 endfunction
 
 function! s:resized() abort
-  for b in getbufinfo(#{bufloaded: 1})
-    let state = getbufvar(b.bufnr, 'mdview', {})
-    if empty(state) || empty(b.windows)
-      continue
-    endif
-    if winwidth(b.windows[0]) != get(state, 'width', -1)
-      call mdview#refresh(b.bufnr)
+  for src in s:sources()
+    let state = s:state(src)
+    let wins = win_findbuf(state.viewer)
+    if !empty(wins) && winwidth(wins[0]) != get(state, 'width', -1)
+      call mdview#refresh(src)
     endif
   endfor
 endfunction
