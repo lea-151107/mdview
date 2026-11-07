@@ -1,0 +1,162 @@
+*mdview.txt*	Markdown バッファの中に mermaid・数式・画像を描く
+
+==============================================================================
+目次						*mdview-contents*
+
+  1. はじめに			|mdview-intro|
+  2. 必要なもの			|mdview-requirements|
+  3. 導入			|mdview-install|
+  4. 使い方			|mdview-usage|
+  5. コマンド			|mdview-commands|
+  6. 設定			|mdview-options|
+  7. ハイライト			|mdview-highlights|
+  8. 制限			|mdview-limitations|
+
+==============================================================================
+1. はじめに					*mdview-intro*
+
+mdview は、Markdown バッファの中の次の部分を画像にして、その場に表示します。
+
+  - ```mermaid のコードブロック（dam で描きます）
+  - ディスプレイ数式: $$…$$、\[…\]、```math（dal で描きます）
+  - 1 行だけで書いた画像: ![alt](path)（PNG・JPEG・GIF・WebP）
+
+mermaid と数式のソースは普段は fold で畳み、その下に画像を表示します。
+カーソルがブロックに入ると fold が開いて編集できます。出ると閉じます。
+画像は保存したとき（|BufWritePost|）と |:MdviewRefresh| で描き直します。
+
+描画は goda.vim のプラグインとして動く Go のプログラム（bin/mdview）が行います。
+
+==============================================================================
+2. 必要なもの					*mdview-requirements*
+
+  - Vim 9.2 以降。|+image| |+image_popup| |+popupwin| |+textprop|
+  - 画像を表示できる端末（sixel または kitty）。|'imageprotocol'| と
+    |v:imagebackend| を確認してください。
+  - goda.vim (https://github.com/Shougo/goda.vim)
+  - ビルドに Go 1.26 以降（実行には不要）
+
+==============================================================================
+3. 導入						*mdview-install*
+
+goda.vim と mdview を 'runtimepath' に入れます。 >
+
+	set runtimepath+=~/vim_markdown_viewer/deps/goda.vim
+	set runtimepath+=~/vim_markdown_viewer/mdview
+	filetype plugin on
+<
+Vim を起動して |:MdviewBuild| を実行します（mdview/go で go build し、
+mdview/bin/mdview を作ります）。シェルからでも同じです。 >
+
+	cd mdview/go && go build -o ../bin/mdview .
+<
+==============================================================================
+4. 使い方					*mdview-usage*
+
+既定では filetype が markdown のバッファで自動的に有効になります
+（|g:mdview_auto_enable|）。保存すると描き直します。
+
+画像を描けなかったブロックは、文字（罫線）での表示に切り替えます。
+それもできないときは、ソースを開いたまま下にエラーを表示します。
+Go 側のログは |:MdviewLog| で見られます。
+
+==============================================================================
+5. コマンド					*mdview-commands*
+
+:MdviewEnable					*:MdviewEnable*
+	現在のバッファで有効にして描きます。
+
+:MdviewDisable					*:MdviewDisable*
+	現在のバッファで無効にします。画像・仮想行・fold を消し、fold の
+	オプションを元に戻します。
+
+:MdviewToggle					*:MdviewToggle*
+	有効と無効を切り替えます。
+
+:MdviewRefresh					*:MdviewRefresh*
+	保存せずに描き直します。
+
+:MdviewBuild					*:MdviewBuild*
+	bin/mdview をビルドします。動いているバイナリは止め、次の描画で
+	新しいものを起動します。
+
+:MdviewLog					*:MdviewLog*
+	Go 側のログ（goda#log('mdview')）を表示します。
+
+:MdviewClearCache				*:MdviewClearCache*
+	画像のキャッシュ（|g:mdview_cache_dir|）を消します。
+
+==============================================================================
+6. 設定						*mdview-options*
+
+*g:mdview_auto_enable*		(既定: 1)
+	markdown のバッファで自動的に有効にします。
+
+*g:mdview_bin*			(既定: mdview/bin/mdview)
+	Go のバイナリのパス。
+
+*g:mdview_cache_dir*		(既定: $XDG_CACHE_HOME/mdview か ~/.cache/mdview)
+	描いた画像（raw RGB）を置くディレクトリ。
+
+*g:mdview_cache_days*		(既定: 30)
+	この日数使っていないキャッシュは、起動後の最初の描画で消します。
+
+*g:mdview_max_width*		(既定: 0)
+	画像の幅の上限（セル数）。0 はウィンドウの幅です。
+
+*g:mdview_max_height*		(既定: 0)
+	画像の高さの上限（セル数）。0 はウィンドウの高さ - 2 です。
+
+*g:mdview_math_size*		(既定: 0)
+	数式の文字の大きさ（px）。0 はセルの高さ × 1.1 です。
+
+*g:mdview_mermaid_scale*	(既定: 0)
+	mermaid の拡大率（dam の Scale）。0 はセルの高さから決めます。
+
+*g:mdview_font*			(既定: '')
+*g:mdview_font_index*		(既定: 0)
+*g:mdview_font_bold*		(既定: '')
+*g:mdview_font_bold_index*	(既定: 0)
+	内蔵フォントに無い文字（日本語など）に使うフォントのファイル
+	（.ttf .otf .ttc）と、.ttc の中の番号。空のときは fc-match で
+	日本語のゴシック体を探します。mermaid は内蔵フォントで描けない
+	ときだけこのフォントで描き直します。数式は \text{} などの中の、
+	数式フォントに無い文字だけに使います。
+
+*g:mdview_cell_pixels*		(既定: [])
+	端末のセルの大きさ [幅, 高さ]（px）。空のときは |getcellpixels()|
+	を使い、それも取れなければ [8, 16] です。
+
+*g:mdview_bg*			(既定: [])
+*g:mdview_fg*			(既定: [])
+	背景色と文字色 [r, g, b]。空のときは Normal の色（GUI か
+	'termguicolors' なら GUI の色、それ以外は cterm の色番号）、端末に
+	問い合わせた色（|getbgcolor()|、|v:termrfgresp|）、'background' の
+	順に決めます。端末の応答が起動より後に届いたときは描き直します
+	（|TermResponseAll|）。画像の透明な部分はこの背景色で塗ります。
+	端末の背景色が取れずに画像の背景がずれるときは、ここで指定して
+	ください。
+
+*g:mdview_fold_marker*		(既定: '▸')
+	畳んだ行の先頭に付ける文字。
+
+==============================================================================
+7. ハイライト					*mdview-highlights*
+
+MdviewText	文字での代替表示（既定: Normal）
+MdviewError	エラー（既定: ErrorMsg）
+Folded		畳んだブロックの行
+
+==============================================================================
+8. 制限						*mdview-limitations*
+
+  - 有効なウィンドウは foldmethod=manual になり、手で作った fold は
+    描くたびに消えます。|:MdviewDisable| で元のオプションに戻します。
+  - インライン数式 $…$ は描きません。
+  - http などの URL の画像は描きません。
+  - 画像は描いたときのウィンドウの幅に合わせます。幅が変わったときは
+    描き直します。
+  - 保存前の編集で行がずれても、仮想行と画像は行に付いて動きます。
+    正しい位置には、次に保存したときに戻ります。
+
+ vim:tw=78:ts=8:noet:ft=help:norl:
