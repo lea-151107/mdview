@@ -14,7 +14,7 @@
 
 let s:root = expand('<sfile>:p:h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 1
+let s:script_version = 2
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -367,98 +367,100 @@ endfunction
 " Build the viewer's lines from the source and the results.
 " Returns {lines, map, rmap, anchors, props}: map[i] is the viewer line of
 " source line i+1, rmap[j] the source line of viewer line j+1.
+"
+" Results with the same start and end form a group (several images on one
+" line). A group replaces its lines with its images (or text), unless it is
+" kept (an image inside text): then the lines stay and the images follow.
+" Headings only add bold to their lines; inline math replaces part of a line.
 function! s:build_view(src, results) abort
   let src_lines = getbufline(a:src, 1, '$')
-  let lines = []
-  let map = []
-  let rmap = []
-  let anchors = []
-  let props = []
-  let plain = []  " viewer lines copied from the source as they are
-  let i = 1
   let n = len(src_lines)
+  let groups = []
+  let headings = {}   " source line -> 1
+  let inline = {}     " source line -> [[col, col_end, text]]
   for r in a:results
-    while i < r.start && i <= n
-      call add(lines, src_lines[i - 1])
-      call add(map, len(lines))
-      call add(plain, len(lines))
-      call add(rmap, i)
+    if r.kind ==# 'heading'
+      for l in range(r.start, r.end)
+        let headings[l] = 1
+      endfor
+    elseif r.kind ==# 'inline_math'
+      if !empty(get(r, 'text', []))
+        if !has_key(inline, r.start)
+          let inline[r.start] = []
+        endif
+        call add(inline[r.start], [r.col, r.col_end, r.text[0]])
+      endif
+    elseif !empty(groups) && groups[-1].start == r.start && groups[-1].end == r.end
+          \ && groups[-1].keep == get(r, 'keep', 0)
+      call add(groups[-1].items, r)
+    elseif empty(groups) || r.start > groups[-1].end
+      call add(groups, #{start: r.start, end: r.end, keep: get(r, 'keep', 0), items: [r]})
+    endif
+  endfor
+
+  let v = #{lines: [], map: [], rmap: [], anchors: [], props: []}
+  let i = 1
+  for g in groups
+    while i < g.start && i <= n
+      call s:copy_line(v, src_lines, i, headings, inline)
       let i += 1
     endwhile
-    let first = len(lines) + 1
-    if !empty(get(r, 'path', ''))
-      let rows = max([1, r.rows])
-      call extend(lines, repeat([''], rows))
-      call extend(rmap, repeat([r.start], rows))
-      let s:next_id += 1
-      call add(anchors, #{id: s:next_id, key: r.key, path: r.path, w: r.w, h: r.h,
-            \ first: first, last: first + rows - 1})
-      call extend(map, repeat([first], r.end - r.start + 1))
-    elseif !empty(get(r, 'text', []))
-      for t in r.text
-        call add(lines, t)
-        call add(rmap, r.start)
-        if !empty(t)
-          call add(props, [len(lines), 'mdview_text', len(t)])
-        endif
+    let failed = filter(copy(g.items), {_, r -> empty(get(r, 'path', '')) && empty(get(r, 'text', []))})
+    if g.keep || !empty(failed)
+      for k in range(g.start, g.end)
+        call s:copy_line(v, src_lines, k, headings, inline)
       endfor
-      call extend(map, repeat([first], r.end - r.start + 1))
     else
-      for k in range(r.start, r.end)
-        call add(lines, src_lines[k - 1])
-        call add(map, len(lines))
-        call add(plain, len(lines))
-        call add(rmap, k)
-      endfor
-      let msg = 'mdview: ' . get(r, 'error', 'cannot draw')
-      call add(lines, msg)
-      call add(rmap, r.end)
-      call add(props, [len(lines), 'mdview_error', len(msg)])
+      call extend(v.map, repeat([len(v.lines) + 1], g.end - g.start + 1))
     endif
-    let i = r.end + 1
+    for r in g.items
+      let indent = repeat(' ', get(r, 'indent', 0))
+      if !empty(get(r, 'path', ''))
+        let first = len(v.lines) + 1
+        let rows = max([1, r.rows])
+        call extend(v.lines, repeat([''], rows))
+        call extend(v.rmap, repeat([r.start], rows))
+        let s:next_id += 1
+        call add(v.anchors, #{id: s:next_id, key: r.key, path: r.path, w: r.w, h: r.h,
+              \ first: first, last: first + rows - 1, indent: get(r, 'indent', 0)})
+      elseif !empty(get(r, 'text', []))
+        for t in r.text
+          call add(v.lines, empty(t) ? '' : indent . t)
+          call add(v.rmap, r.start)
+          if !empty(t)
+            call add(v.props, [len(v.lines), 'mdview_text', len(indent . t)])
+          endif
+        endfor
+      else
+        let msg = indent . 'mdview: ' . get(r, 'error', 'cannot draw')
+        call add(v.lines, msg)
+        call add(v.rmap, r.end)
+        call add(v.props, [len(v.lines), 'mdview_error', len(msg)])
+      endif
+    endfor
+    let i = g.end + 1
   endfor
   while i <= n
-    call add(lines, src_lines[i - 1])
-    call add(map, len(lines))
-    call add(plain, len(lines))
-    call add(rmap, i)
+    call s:copy_line(v, src_lines, i, headings, inline)
     let i += 1
   endwhile
-  call extend(props, s:heading_props(lines, plain))
-  return #{lines: lines, map: map, rmap: rmap, anchors: anchors, props: props}
+  return v
 endfunction
 
-" Bold text properties for the headings among the plain lines: ATX (# …)
-" and Setext (a line underlined with === or ---), outside fenced code.
-function! s:heading_props(lines, plain) abort
-  let props = []
-  let fence = ''
-  for idx in range(len(a:plain))
-    let lnum = a:plain[idx]
-    let t = a:lines[lnum - 1]
-    if empty(fence)
-      let m = matchstr(t, '^ \{0,3}\zs\(`\{3,}\|\~\{3,}\)')
-      if !empty(m)
-        let fence = m
-        continue
-      endif
-    else
-      let m = matchstr(t, '^ \{0,3}\zs[`~]\+\ze\s*$')
-      if !empty(m) && m ==# repeat(fence[0], len(m)) && len(m) >= len(fence)
-        let fence = ''
-      endif
-      continue
-    endif
-    if t =~# '^ \{0,3}#\{1,6}\%(\s\|$\)'
-      call add(props, [lnum, 'mdview_heading', max([1, len(t)])])
-    elseif t !~# '^\s*$' && idx + 1 < len(a:plain) && a:plain[idx + 1] == lnum + 1
-          \ && a:lines[lnum] =~# '^ \{0,3}\%(=\+\|-\+\)\s*$'
-          \ && t !~# '^ \{0,3}\%([-*+>]\|\d\+[.)]\)\%(\s\|$\)'
-          \ && t !~# '^ \{0,3}\%([-*_]\s*\)\{3,}$'
-      call add(props, [lnum, 'mdview_heading', len(t)])
-    endif
+" Copy source line l to the viewer, with its inline math replaced and bold
+" when it is a heading.
+function! s:copy_line(v, src_lines, l, headings, inline) abort
+  let t = a:src_lines[a:l - 1]
+  " Replace from the right so the byte columns stay valid.
+  for [c, e, text] in sort(copy(get(a:inline, a:l, [])), {x, y -> y[0] - x[0]})
+    let t = strpart(t, 0, c) . text . strpart(t, e)
   endfor
-  return props
+  call add(a:v.lines, t)
+  call add(a:v.map, len(a:v.lines))
+  call add(a:v.rmap, a:l)
+  if has_key(a:headings, a:l) && !empty(t)
+    call add(a:v.props, [len(a:v.lines), 'mdview_heading', len(t)])
+  endif
 endfunction
 
 function! s:draw(src, state) abort
@@ -572,9 +574,9 @@ endfunction
 function! s:popup_opts(win, a, mode) abort
   return a:mode ==# 'start'
         \ ? #{textprop: 'mdview_anchor', textpropid: a:a.id, textpropwin: a:win,
-        \     pos: 'topleft', line: -1, col: 0}
+        \     pos: 'topleft', line: -1, col: get(a:a, 'indent', 0)}
         \ : #{textprop: 'mdview_anchor_end', textpropid: a:a.id, textpropwin: a:win,
-        \     pos: 'botleft', line: 1, col: 0}
+        \     pos: 'botleft', line: 1, col: get(a:a, 'indent', 0)}
 endfunction
 
 function! s:make_popups(win, src, state) abort

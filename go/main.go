@@ -33,7 +33,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 1
+const scriptVersion = 2
 
 const blockTimeout = 15 * time.Second
 
@@ -85,6 +85,10 @@ type result struct {
 	Rows  int      `json:"rows,omitempty"`
 	Text  []string `json:"text,omitempty"`
 	Error string   `json:"error,omitempty"`
+	// Keep: the lines stay and the image goes below them (an image inside
+	// text). Indent: columns to shift the image right (quotes, lists).
+	Keep   bool `json:"keep,omitempty"`
+	Indent int  `json:"indent,omitempty"`
 }
 
 func (p *plugin) render(ctx context.Context, h sdk.Host, params []any) (any, error) {
@@ -133,17 +137,19 @@ func (p *plugin) renderAll(ctx context.Context, req request) ([]result, error) {
 	}
 	st.Fonts = fonts
 
-	var bs []blocks.Block
-	for _, b := range blocks.Parse(req.Lines) {
-		// Only what the Vim side places so far: blocks that replace their lines.
-		if (b.Kind == blocks.Mermaid || b.Kind == blocks.Math || b.Kind == blocks.Image) && !b.Keep {
-			bs = append(bs, b)
-		}
-	}
+	bs := blocks.Parse(req.Lines)
 	results := make([]result, len(bs))
 	sem := make(chan struct{}, max(1, runtime.NumCPU()))
 	var wg sync.WaitGroup
 	for i, b := range bs {
+		switch b.Kind {
+		case blocks.Heading:
+			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+			continue
+		case blocks.Mermaid, blocks.Math, blocks.Image:
+		default:
+			continue // not shown yet
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -155,7 +161,8 @@ func (p *plugin) renderAll(ctx context.Context, req request) ([]result, error) {
 				return renderBlock(bctx, req, st, b), nil
 			})
 			if err != nil {
-				r = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Error: err.Error()}
+				r = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep,
+					Indent: b.Indent, Error: err.Error()}
 			}
 			results[i] = r
 		}()
@@ -172,7 +179,10 @@ func (p *plugin) renderAll(ctx context.Context, req request) ([]result, error) {
 }
 
 func renderBlock(ctx context.Context, req request, st render.Style, b blocks.Block) result {
-	r := result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+	r := result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep, Indent: b.Indent}
+	if b.Indent > 0 && st.MaxW > 0 {
+		st.MaxW = max(st.CellW, st.MaxW-b.Indent*st.CellW)
+	}
 	var keySrc, stamp string
 	var path string
 	switch b.Kind {
