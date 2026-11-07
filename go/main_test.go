@@ -59,3 +59,85 @@ func TestRenderAll(t *testing.T) {
 		}
 	}
 }
+
+func TestRunProgressive(t *testing.T) {
+	dir := t.TempDir()
+	req := request{
+		Lines: []string{"# T", "```mermaid", "graph TD", "  A-->B", "```", "a $x^2$ b"},
+		Dir:   dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16}, WidthPx: 640, HeightPx: 480,
+		Bg: []int{0, 0, 0}, Fg: []int{255, 255, 255}, InlineMath: 1,
+	}
+	type call struct {
+		rs    []result
+		final bool
+	}
+	var calls []call
+	p := &plugin{}
+	collect := func(rs []result, final bool) error {
+		calls = append(calls, call{shown(rs), final})
+		return nil
+	}
+	if err := p.run(context.Background(), req, collect); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) < 2 || calls[0].final || !calls[len(calls)-1].final {
+		t.Fatalf("calls: %+v", calls)
+	}
+	first := calls[0].rs
+	if len(first) != 3 || first[0].Kind != "heading" || !first[1].Pending || first[2].Kind != "inline_math" {
+		t.Fatalf("first: %+v", first)
+	}
+	if first[2].Text[0] != "x²" || first[2].Col != 2 || first[2].ColEnd != 7 {
+		t.Fatalf("inline math: %+v", first[2])
+	}
+	last := calls[len(calls)-1].rs
+	if last[1].Pending || last[1].Path == "" {
+		t.Fatalf("last: %+v", last[1])
+	}
+
+	// Drawn again: everything comes from the cache in one final call.
+	calls = nil
+	if err := p.run(context.Background(), req, collect); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 1 || !calls[0].final {
+		t.Fatalf("cached: %+v", calls)
+	}
+
+	// Inline math off.
+	calls = nil
+	req.InlineMath = 0
+	if err := p.run(context.Background(), req, collect); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range calls[0].rs {
+		if r.Kind == "inline_math" {
+			t.Fatalf("inline math with InlineMath 0: %+v", r)
+		}
+	}
+}
+
+func TestRunCanceled(t *testing.T) {
+	dir := t.TempDir()
+	req := request{
+		Lines: []string{"```mermaid", "graph TD", "  A-->B", "```"},
+		Dir:   dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16}, WidthPx: 640, HeightPx: 480,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var finals int
+	err := (&plugin{}).run(ctx, req, func(rs []result, final bool) error {
+		cancel() // canceled after the first (partial) send
+		if final {
+			finals++
+		}
+		return nil
+	})
+	if finals != 0 && err == nil {
+		// The block may finish before the cancel is seen; both are fine,
+		// but a canceled run must not report success without a final call.
+		return
+	}
+	if err == nil {
+		t.Fatal("no error and no final call")
+	}
+}

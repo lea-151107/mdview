@@ -9,12 +9,7 @@ import (
 	"image"
 	"image/color"
 	"log"
-	"net/url"
-	"os"
-	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +20,7 @@ import (
 
 	"mdview/internal/blocks"
 	"mdview/internal/cache"
+	"mdview/internal/imageload"
 	"mdview/internal/render"
 )
 
@@ -37,10 +33,19 @@ const scriptVersion = 2
 
 const blockTimeout = 15 * time.Second
 
+// flushInterval is how often finished blocks are sent while others are
+// still being drawn.
+const flushInterval = 200 * time.Millisecond
+
 type plugin struct {
 	mu    sync.Mutex
 	fonts map[string]*render.Fonts // by font spec
+
+	jobMu sync.Mutex
+	jobs  map[int]*job // by buffer number: the running render of a buffer
 }
+
+type job struct{ cancel context.CancelFunc }
 
 func (*plugin) Name() string       { return "mdview" }
 func (*plugin) ScriptVersion() int { return scriptVersion }
@@ -54,6 +59,7 @@ func (p *plugin) Handlers() map[string]sdk.Handler {
 
 // request is what autoload/mdview.vim sends to "render".
 type request struct {
+	ID           int      `json:"id"`
 	Bufnr        int      `json:"bufnr"`
 	Tick         int      `json:"tick"`
 	Lines        []string `json:"lines"`
@@ -70,6 +76,8 @@ type request struct {
 	FontIndex    int      `json:"font_index"`
 	FontBold     string   `json:"font_bold"`
 	FontBoldIdx  int      `json:"font_bold_index"`
+	InlineMath   int      `json:"inline_math"`
+	Remote       int      `json:"remote"`
 	Callback     string   `json:"callback"`
 }
 
@@ -89,38 +97,111 @@ type result struct {
 	// text). Indent: columns to shift the image right (quotes, lists).
 	Keep   bool `json:"keep,omitempty"`
 	Indent int  `json:"indent,omitempty"`
+	// Pending: still being drawn; a later result replaces it.
+	Pending bool `json:"pending,omitempty"`
+	// Col, ColEnd: the byte range of inline math in its line (Text[0]
+	// replaces it).
+	Col    int `json:"col"`
+	ColEnd int `json:"col_end"`
 }
 
+// render starts drawing a buffer and returns at once. The results go to
+// mdview#apply (or req.Callback) as they come: first what is cached, then
+// finished blocks every flushInterval, then all of them (final). A new
+// request for the same buffer cancels the one running.
 func (p *plugin) render(ctx context.Context, h sdk.Host, params []any) (any, error) {
 	var req request
 	if err := sdk.DecodeArgs(params, &req); err != nil {
 		return nil, err
 	}
-	results, err := p.renderAll(ctx, req)
-	if err != nil {
+	if err := check(req); err != nil {
 		return nil, err
 	}
-	out, err := sdk.Generic(results)
-	if err != nil {
-		return nil, err
+	jctx, cancel := context.WithCancel(context.Background())
+	j := &job{cancel: cancel}
+	p.jobMu.Lock()
+	if old := p.jobs[req.Bufnr]; old != nil {
+		old.cancel()
 	}
+	if p.jobs == nil {
+		p.jobs = map[int]*job{}
+	}
+	p.jobs[req.Bufnr] = j
+	p.jobMu.Unlock()
+
 	cb := req.Callback
 	if cb == "" {
 		cb = "mdview#apply"
 	}
-	if _, err := h.Call(ctx, cb, req.Bufnr, req.Tick, out); err != nil {
-		return nil, fmt.Errorf("%s: %w", cb, err)
+	send := func(results []result, final bool) error {
+		if jctx.Err() != nil {
+			return jctx.Err()
+		}
+		out, err := sdk.Generic(shown(results))
+		if err != nil {
+			return err
+		}
+		meta := map[string]any{"id": req.ID, "final": final}
+		if _, err := h.Call(jctx, cb, req.Bufnr, req.Tick, out, meta); err != nil {
+			return fmt.Errorf("%s: %w", cb, err)
+		}
+		return nil
 	}
+	go func() {
+		defer func() {
+			p.jobMu.Lock()
+			if p.jobs[req.Bufnr] == j {
+				delete(p.jobs, req.Bufnr)
+			}
+			p.jobMu.Unlock()
+			cancel()
+		}()
+		if err := p.run(jctx, req, send); err != nil && jctx.Err() == nil {
+			log.Printf("render: %v", err)
+		}
+	}()
 	return nil, nil
 }
 
-func (p *plugin) renderAll(ctx context.Context, req request) ([]result, error) {
+func check(req request) error {
 	if len(req.Cell) != 2 || req.Cell[0] <= 0 || req.Cell[1] <= 0 {
-		return nil, fmt.Errorf("invalid cell size %v", req.Cell)
+		return fmt.Errorf("invalid cell size %v", req.Cell)
 	}
 	if req.CacheDir == "" {
-		return nil, fmt.Errorf("no cache directory")
+		return fmt.Errorf("no cache directory")
 	}
+	return nil
+}
+
+// shown drops the empty results (blocks with nothing to show).
+func shown(results []result) []result {
+	out := make([]result, 0, len(results))
+	for _, r := range results {
+		if r.Kind != "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// renderAll draws everything and returns the final results.
+func (p *plugin) renderAll(ctx context.Context, req request) ([]result, error) {
+	if err := check(req); err != nil {
+		return nil, err
+	}
+	var out []result
+	err := p.run(ctx, req, func(rs []result, final bool) error {
+		if final {
+			out = shown(rs)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// run parses the buffer and calls send with the results: once with what is
+// ready at once (cache hits, headings, inline math), then as blocks finish.
+func (p *plugin) run(ctx context.Context, req request, send func([]result, bool) error) error {
 	st := render.Style{
 		Bg:           rgba(req.Bg, color.RGBA{0, 0, 0, 255}),
 		Fg:           rgba(req.Fg, color.RGBA{220, 220, 220, 255}),
@@ -139,84 +220,160 @@ func (p *plugin) renderAll(ctx context.Context, req request) ([]result, error) {
 
 	bs := blocks.Parse(req.Lines)
 	results := make([]result, len(bs))
-	sem := make(chan struct{}, max(1, runtime.NumCPU()))
-	var wg sync.WaitGroup
+	var todo []int
 	for i, b := range bs {
 		switch b.Kind {
 		case blocks.Heading:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
-			continue
+		case blocks.InlineMath:
+			if req.InlineMath != 0 {
+				if text, err := dal.RenderLine(b.Source, dal.LineOptions{}); err == nil && text != "" {
+					results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End,
+						Col: b.Col, ColEnd: b.ColEnd, Text: []string{text}}
+				}
+			}
 		case blocks.Mermaid, blocks.Math, blocks.Image:
-		default:
-			continue // not shown yet
+			r, done := prepare(req, blockStyle(st, b), b)
+			if !done {
+				r.Pending = true
+				todo = append(todo, i)
+			}
+			results[i] = r
 		}
-		wg.Add(1)
+	}
+	if len(todo) == 0 {
+		return send(results, true)
+	}
+	if err := send(results, false); err != nil {
+		return err
+	}
+
+	type done struct {
+		i int
+		r result
+	}
+	ch := make(chan done, len(todo))
+	sem := make(chan struct{}, max(1, runtime.NumCPU()))
+	for _, i := range todo {
+		b := bs[i]
 		go func() {
-			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				ch <- done{i, results[i]}
+				return
+			}
 			defer func() { <-sem }()
 			bctx, cancel := context.WithTimeout(ctx, blockTimeout)
 			defer cancel()
+			bst := blockStyle(st, b)
 			r, err := sdk.Guard(bctx, func() (result, error) {
-				return renderBlock(bctx, req, st, b), nil
+				return draw(bctx, req, bst, b), nil
 			})
 			if err != nil {
-				r = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep,
-					Indent: b.Indent, Error: err.Error()}
+				r = base(b)
+				r.Error = err.Error()
 			}
-			results[i] = r
+			ch <- done{i, r}
 		}()
 	}
-	wg.Wait()
-	// Drop images that are not files we can draw (URLs): they get nothing.
-	out := results[:0]
-	for _, r := range results {
-		if r.Kind != "" {
-			out = append(out, r)
+	tick := time.NewTicker(flushInterval)
+	defer tick.Stop()
+	dirty := false
+	for left := len(todo); left > 0; {
+		select {
+		case d := <-ch:
+			results[d.i] = d.r
+			left--
+			dirty = true
+		case <-tick.C:
+			if dirty {
+				if err := send(results, false); err != nil {
+					return err
+				}
+				dirty = false
+			}
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	return out, nil
+	return send(results, true)
 }
 
-func renderBlock(ctx context.Context, req request, st render.Style, b blocks.Block) result {
-	r := result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep, Indent: b.Indent}
+func base(b blocks.Block) result {
+	return result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep, Indent: b.Indent}
+}
+
+// blockStyle narrows the width for an indented block.
+func blockStyle(st render.Style, b blocks.Block) render.Style {
 	if b.Indent > 0 && st.MaxW > 0 {
 		st.MaxW = max(st.CellW, st.MaxW-b.Indent*st.CellW)
 	}
-	var keySrc, stamp string
-	var path string
-	switch b.Kind {
-	case blocks.Image:
-		path = resolveImage(req.Dir, b.Path)
-		if path == "" {
-			return result{} // remote or data: URL
+	return st
+}
+
+// cacheKey returns the cache key of a block, or an error to show for it.
+// ok is false for an image mdview does not show (a URL with remote images
+// off, an unknown scheme).
+func cacheKey(req request, st render.Style, b blocks.Block) (key string, src imageload.Source, ok bool, err error) {
+	keySrc, stamp := b.Source, ""
+	if b.Kind == blocks.Image {
+		src, ok = imageload.Resolve(req.Dir, b.Path)
+		if !ok || (src.Remote && req.Remote == 0) {
+			return "", src, false, nil
 		}
-		info, err := os.Stat(path)
+		stamp, err = src.Stamp()
 		if err != nil {
-			r.Error = fmt.Sprintf("image: %v", err)
-			return r
+			return "", src, true, fmt.Errorf("image: %w", err)
 		}
-		keySrc = path
-		stamp = info.ModTime().UTC().Format(time.RFC3339Nano) + "/" + strconv.FormatInt(info.Size(), 10)
-	default:
-		keySrc = b.Source
+		keySrc = b.Path
 	}
-	key := cache.Key(renderVersion, mermaid.Version, dal.Version, string(b.Kind), keySrc, stamp,
+	key = cache.Key(renderVersion, mermaid.Version, dal.Version, string(b.Kind), keySrc, stamp,
 		fmt.Sprint(st.CellW, st.CellH, st.MaxW, st.MaxH, st.Bg, st.Fg, req.MathSize, req.MermaidScale,
 			req.Font, req.FontIndex, req.FontBold, req.FontBoldIdx))
-	if e, ok := cache.Load(req.CacheDir, key); ok {
-		return withEntry(r, key, e, st)
-	}
+	return key, src, true, nil
+}
 
+// prepare returns the result of a block when it needs no drawing (cached,
+// or an error found at once); done is false when draw must run.
+func prepare(req request, st render.Style, b blocks.Block) (r result, done bool) {
+	r = base(b)
+	key, _, ok, err := cacheKey(req, st, b)
+	switch {
+	case !ok:
+		return result{}, true
+	case err != nil:
+		r.Error = err.Error()
+		return r, true
+	}
+	if e, ok := cache.Load(req.CacheDir, key); ok {
+		return withEntry(r, key, e, st), true
+	}
+	return r, false
+}
+
+// draw draws a block and stores it in the cache.
+func draw(ctx context.Context, req request, st render.Style, b blocks.Block) result {
+	r := base(b)
+	key, src, ok, err := cacheKey(req, st, b)
+	switch {
+	case !ok:
+		return result{}
+	case err != nil:
+		r.Error = err.Error()
+		return r
+	}
 	var img image.Image
-	var err error
 	switch b.Kind {
 	case blocks.Mermaid:
 		img, err = render.Mermaid(ctx, b.Source, st)
 	case blocks.Math:
 		img, err = render.Math(ctx, b.Source, st)
 	case blocks.Image:
-		img, err = render.ImageFile(path)
+		img, err = imageload.Load(ctx, src, req.Remote != 0)
+		if err != nil {
+			err = fmt.Errorf("image: %w", err)
+		}
 	}
 	if err != nil {
 		r.Error = render.ShortError(err)
@@ -259,36 +416,6 @@ func fallbackText(ctx context.Context, b blocks.Block, st render.Style) []string
 		return nil
 	}
 	return lines
-}
-
-// resolveImage turns the path of ![](path) into a file name, or "" for a
-// URL that is not a local file.
-func resolveImage(dir, p string) string {
-	switch {
-	case strings.HasPrefix(p, "file://"):
-		if u, err := url.Parse(p); err == nil {
-			return u.Path
-		}
-		return ""
-	case strings.Contains(p, "://"), strings.HasPrefix(p, "data:"):
-		return ""
-	}
-	if strings.HasPrefix(p, "~/") {
-		if home, err := os.UserHomeDir(); err == nil {
-			p = filepath.Join(home, p[2:])
-		}
-	}
-	if !filepath.IsAbs(p) {
-		p = filepath.Join(dir, p)
-	}
-	if _, err := os.Stat(p); err != nil {
-		if u, err := url.PathUnescape(p); err == nil {
-			if _, err := os.Stat(u); err == nil {
-				return u
-			}
-		}
-	}
-	return p
 }
 
 func (p *plugin) loadFonts(req request) (*render.Fonts, error) {

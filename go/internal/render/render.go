@@ -6,20 +6,14 @@ package render
 import (
 	"context"
 	"errors"
-	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
-	_ "image/gif"  // register the GIF decoder
-	_ "image/jpeg" // register the JPEG decoder
-	_ "image/png"  // register the PNG decoder
-	"os"
 	"strings"
 
 	"github.com/lea/dal"
 	mermaid "github.com/lea/mermaid"
 	xdraw "golang.org/x/image/draw"
-	_ "golang.org/x/image/webp" // register the WebP decoder
 )
 
 // Style says how and how large to draw.
@@ -101,30 +95,6 @@ func MathText(ctx context.Context, src string, cols int) ([]string, error) {
 		return nil, err
 	}
 	return res.Lines, nil
-}
-
-// ImageFile decodes a PNG, JPEG, GIF (first frame) or WebP file.
-func ImageFile(path string) (image.Image, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	cfg, _, err := image.DecodeConfig(f)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	if int64(cfg.Width)*int64(cfg.Height) > 64<<20 {
-		return nil, fmt.Errorf("%s: image too large (%dx%d)", path, cfg.Width, cfg.Height)
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return nil, err
-	}
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	return img, nil
 }
 
 // Finish scales img down to fit MaxW × MaxH (never up), flattens it onto Bg

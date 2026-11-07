@@ -21,6 +21,7 @@ let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
 let s:next_id = 1     " text property ids, unique over all buffers
 let s:pruned = 0
 let s:resize_timer = 0
+let s:syncing = 0     " moving one of source and viewer to follow the other
 
 function! s:bin() abort
   return expand(get(g:, 'mdview_bin', s:root . '/bin/mdview'))
@@ -56,10 +57,12 @@ function! s:init() abort
   call goda#register('mdview', s:bin(), #{version: s:script_version})
   highlight default link MdviewText Normal
   highlight default link MdviewError ErrorMsg
+  highlight default link MdviewPending Comment
   " Only attributes: combined with the colors of the markdown syntax.
   highlight default MdviewHeading term=bold cterm=bold gui=bold
   for [name, hl] in [['mdview_anchor', ''], ['mdview_anchor_end', ''],
-        \ ['mdview_text', 'MdviewText'], ['mdview_error', 'MdviewError']]
+        \ ['mdview_text', 'MdviewText'], ['mdview_error', 'MdviewError'],
+        \ ['mdview_pending', 'MdviewPending']]
     if empty(prop_type_get(name))
       call prop_type_add(name, empty(hl) ? {} : #{highlight: hl})
     endif
@@ -143,7 +146,7 @@ function! mdview#open(...) abort
   let viewer = bufnr('%')
   setlocal buftype=nofile bufhidden=wipe noswapfile nobuflisted
   silent execute 'file' fnameescape(name)
-  setlocal filetype=markdown
+  call s:set_markdown_filetype()
   setlocal nofoldenable nonumber norelativenumber nolist signcolumn=no
   setlocal wrap linebreak conceallevel=2
   let b:mdview_source = src
@@ -151,9 +154,11 @@ function! mdview#open(...) abort
   setlocal nomodifiable nomodified
   call cursor(lnum, 1)
   nnoremap <buffer><silent> q <Cmd>call mdview#close()<CR>
+  nnoremap <buffer><silent> <CR> <Cmd>call mdview#jump()<CR>
   execute 'augroup mdview_view_' . viewer
     autocmd!
     execute 'autocmd BufWipeout <buffer=' . viewer . '> call s:detach(' . src . ')'
+    execute 'autocmd CursorMoved <buffer=' . viewer . '> call s:follow_back(' . src . ')'
   augroup END
 
   let state.viewer = viewer
@@ -163,6 +168,7 @@ function! mdview#open(...) abort
   execute 'augroup mdview_src_' . src
     autocmd!
     execute 'autocmd BufWritePost <buffer=' . src . '> call mdview#refresh(' . src . ')'
+    execute 'autocmd TextChanged,TextChangedI <buffer=' . src . '> call s:on_changed(' . src . ')'
     execute 'autocmd CursorMoved,CursorMovedI <buffer=' . src . '> call s:follow(' . src . ')'
     execute 'autocmd BufWipeout <buffer=' . src . '> call mdview#close(' . src . ')'
   augroup END
@@ -206,6 +212,7 @@ function! s:detach(src) abort
   if empty(state)
     return
   endif
+  call timer_stop(get(state, 'timer', 0))
   for [win, p] in items(s:popups)
     if p.src == a:src
       call s:close_popups(str2nr(win))
@@ -261,7 +268,11 @@ function! mdview#refresh(...) abort
   endif
   let [bg, fg] = s:colors()
   let dir = empty(bufname(src)) ? getcwd() : fnamemodify(bufname(src), ':p:h')
+  let s:req_id = get(s:, 'req_id', 0) + 1
+  let state.req_id = s:req_id
+  call timer_stop(get(state, 'timer', 0))
   let req = #{
+        \ id: s:req_id,
         \ bufnr: src,
         \ tick: getbufvar(src, 'changedtick'),
         \ lines: getbufline(src, 1, '$'),
@@ -278,6 +289,8 @@ function! mdview#refresh(...) abort
         \ font_index: get(g:, 'mdview_font_index', 0),
         \ font_bold: expand(get(g:, 'mdview_font_bold', '')),
         \ font_bold_index: get(g:, 'mdview_font_bold_index', 0),
+        \ inline_math: get(g:, 'mdview_inline_math', 1) ? 1 : 0,
+        \ remote: get(g:, 'mdview_remote', 0) ? 1 : 0,
         \ }
   let state.width = info.width
   let state.colors = [bg, fg]
@@ -343,22 +356,33 @@ endfunction
 " ---------------------------------------------------------------------------
 " Results from the binary
 
-" Called by the binary. results: [{kind, start, end, key, path, w, h, rows,
-" text, error}], ordered by start.
-function! mdview#apply(src, tick, results) abort
+" Called by the binary, several times per request: first with what is ready
+" at once (blocks still being drawn have pending set), then as blocks finish,
+" the last time with meta.final set. results: [{kind, start, end, key, path,
+" w, h, rows, text, error, keep, indent, pending, col, col_end}], ordered by
+" start. meta: {id, final}; results of an older request are dropped.
+function! mdview#apply(src, tick, results, ...) abort
   let state = s:state(a:src)
   if empty(state)
     return
   endif
+  let meta = a:0 ? a:1 : #{id: get(state, 'req_id', 0), final: 1}
+  if meta.id != get(state, 'req_id', 0)
+    return
+  endif
   if getbufvar(a:src, 'changedtick') != a:tick
     " Changed while drawing: ask again, but not forever while typing.
-    let state.retry = get(state, 'retry', 0) + 1
-    if state.retry <= 3
-      call mdview#refresh(a:src)
+    if meta.final
+      let state.retry = get(state, 'retry', 0) + 1
+      if state.retry <= 3
+        call mdview#refresh(a:src)
+      endif
     endif
     return
   endif
-  let state.retry = 0
+  if meta.final
+    let state.retry = 0
+  endif
   let state.results = a:results
   let state.tick = a:tick
   call s:draw(a:src, state)
@@ -432,10 +456,11 @@ function! s:build_view(src, results) abort
           endif
         endfor
       else
-        let msg = indent . 'mdview: ' . get(r, 'error', 'cannot draw')
+        let pending = get(r, 'pending', 0)
+        let msg = indent . 'mdview: ' . (pending ? 'drawing…' : get(r, 'error', 'cannot draw'))
         call add(v.lines, msg)
         call add(v.rmap, r.end)
-        call add(v.props, [len(v.lines), 'mdview_error', len(msg)])
+        call add(v.props, [len(v.lines), pending ? 'mdview_pending' : 'mdview_error', len(msg)])
       endif
     endfor
     let i = g.end + 1
@@ -513,17 +538,96 @@ endfunction
 
 function! s:follow(src) abort
   let state = s:state(a:src)
-  if empty(state) || bufnr('%') != a:src || state.here
+  if empty(state) || bufnr('%') != a:src || state.here || s:syncing
     return
   endif
   let vl = get(state.map, line('.') - 1, get(state.map, -1, 1))
-  for win in win_findbuf(state.viewer)
-    let height = winheight(win)
-    let off = min([winline() - 1, height - 1])
-    let top = max([1, vl - off])
-    call win_execute(win, 'call winrestview(#{topline: ' . top . ', lnum: ' . vl . ', col: 0})')
-    call s:update_modes(win)
-  endfor
+  let s:syncing = 1
+  try
+    for win in win_findbuf(state.viewer)
+      let height = winheight(win)
+      let off = min([winline() - 1, height - 1])
+      let top = max([1, vl - off])
+      call win_execute(win, 'call winrestview(#{topline: ' . top . ', lnum: ' . vl . ', col: 0})')
+      call s:update_modes(win)
+    endfor
+  finally
+    let s:syncing = 0
+  endtry
+endfunction
+
+" With g:mdview_sync_back, moving in the viewer moves the source too (the
+" other way of s:follow; s:syncing keeps them from chasing each other).
+function! s:follow_back(src) abort
+  let state = s:state(a:src)
+  if !get(g:, 'mdview_sync_back', 0) || empty(state) || state.here || s:syncing
+        \ || bufnr('%') != state.viewer
+    return
+  endif
+  let sl = get(state.rmap, line('.') - 1, 1)
+  let s:syncing = 1
+  try
+    for win in win_findbuf(a:src)
+      let off = min([winline() - 1, winheight(win) - 1])
+      call win_execute(win, 'call winrestview(#{topline: ' . max([1, sl - off]) . ', lnum: ' . sl . ', col: 0})')
+    endfor
+  finally
+    let s:syncing = 0
+  endtry
+endfunction
+
+" <CR> in the viewer: go to the source line of the cursor line.
+function! mdview#jump() abort
+  let src = get(b:, 'mdview_source', 0)
+  let state = s:state(src)
+  if empty(state)
+    return
+  endif
+  let sl = get(state.rmap, line('.') - 1, 1)
+  if state.here
+    " Closing puts the source back at the line the viewer's cursor is on.
+    call mdview#close(src)
+    return
+  endif
+  let wins = win_findbuf(src)
+  if empty(wins)
+    execute 'leftabove vertical sbuffer' src
+  else
+    call win_gotoid(wins[0])
+  endif
+  call cursor(sl, 1)
+endfunction
+
+" Edited: draw again after g:mdview_update_delay ms without changes.
+function! s:on_changed(src) abort
+  let state = s:state(a:src)
+  if empty(state) || !get(g:, 'mdview_live', 1)
+    return
+  endif
+  call timer_stop(get(state, 'timer', 0))
+  let state.timer = timer_start(get(g:, 'mdview_update_delay', 500),
+        \ {-> mdview#refresh(a:src)})
+endfunction
+
+" filetype=markdown for the viewer, with g:mdview_fenced_languages as the
+" fenced code languages when the user has not set g:markdown_fenced_languages.
+function! s:set_markdown_filetype() abort
+  let langs = get(g:, 'mdview_fenced_languages', [])
+  if empty(langs) || !empty(get(g:, 'markdown_fenced_languages', []))
+    setlocal filetype=markdown
+    return
+  endif
+  let saved = exists('g:markdown_fenced_languages') ? g:markdown_fenced_languages : v:null
+  let g:markdown_fenced_languages = langs
+  try
+    setlocal filetype=markdown
+  finally
+    if saved is v:null
+      unlet! g:markdown_fenced_languages
+    else
+      let g:markdown_fenced_languages = saved
+    endif
+  endtry
 endfunction
 
 " ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ Markdown の書式、mermaid、数式、画像をまとめて確認するため�
 - エスケープ: \*not italic\* と \_not italic\_
 - 単語の中の下線: snake_case_name は斜体にならない
 - リンク: [mdview のヘルプ](doc/mdview.txt) と <https://example.com>
-- インライン数式（描かない）: $E = mc^2$ と $\alpha + \beta$
+- インライン数式（1 行のテキストにする）: $E = mc^2$ と $\alpha + \beta$ と $\frac{a+b}{c}$
 
 ## 2. 見出し
 
