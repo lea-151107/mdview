@@ -13,10 +13,10 @@ function! Test_contract() abort
         \ '┌────┬──────┐', '│    │ cell │', '│    │      │', '├────┼──────┤', '│ y  │    b │',
         \ '└────┴──────┘',
         \ '│', '│',
-        \ '╭─ mermaid ' . repeat('─', 69), 'graph TD', '  A -->', '╰' . repeat('─', 79),
+        \ '╭─ mermaid ' . repeat('─', 68) . '╮', 'graph TD', '  A -->', '╰' . repeat('─', 78) . '╯',
         \ 'mdview: error',
         \ '│ 💡 Tip', '│ - │ t',
-        \ '╭─ go ' . repeat('─', 74), '        x := 1', '╰' . repeat('─', 79),
+        \ '╭─ go ' . repeat('─', 73) . '╮', '        x := 1', '╰' . repeat('─', 78) . '╯',
         \ '│ ' . repeat('─', 78),
         \ ], v.lines)
   call assert_equal(['mdview_alert_tip', 'mdview_bold', 'mdview_code_border',

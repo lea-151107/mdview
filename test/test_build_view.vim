@@ -287,8 +287,8 @@ function! Test_build_view_code() abort
   let src = Src(['```go', "func f() {", "\tx := 1", '', '}', '```', 'after'])
   let v = S('build_view')(src, [#{kind: 'code', start: 1, end: 6, lang: 'go',
         \ cols: [0, 0, 0, 0, 0, 0], closed: 1}], #{cellw: 8, cols: 20})
-  call assert_equal(['╭─ go ' . repeat('─', 14), 'func f() {', '        x := 1', '', '}',
-        \ '╰' . repeat('─', 19), 'after'], v.lines)
+  call assert_equal(['╭─ go ' . repeat('─', 13) . '╮', 'func f() {', '        x := 1', '', '}',
+        \ '╰' . repeat('─', 18) . '╯', 'after'], v.lines)
   call assert_equal(range(1, 7), v.map)
   call assert_equal([[1, 'mdview_code_lang', 2, 8], [1, 'mdview_code_border', len(v.lines[0]), 1],
         \ [2, 'mdview_code_border', '│ ', 1], [3, 'mdview_code_border', '│ ', 1],
@@ -303,7 +303,7 @@ function! Test_build_view_code_in_quote_and_list() abort
   let src = Src(['> - ```', '>   x', '>  y'])
   let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 3, marks: [0, 0, 0]},
         \ #{kind: 'code', start: 1, end: 3, cols: [4, 4, 3]}], #{cellw: 8, cols: 20})
-  call assert_equal(['│ - ╭' . repeat('─', 15), 'x', 'y'], v.lines)
+  call assert_equal(['│ - ╭' . repeat('─', 14) . '╮', 'x', 'y'], v.lines)
   call assert_equal([[2, 'mdview_quote_bar', '│', 1], [2, 'mdview_code_border', '   │ ', 1]],
         \ filter(copy(v.props), 'v:val[0] == 2'))
   call assert_equal([[2, 3, '', 1]], v.code)
@@ -320,7 +320,7 @@ function! Test_build_view_code_of_mermaid() abort
   let src = Src(['```mermaid', 'graph TD', '```'])
   let code = #{kind: 'code', start: 1, end: 3, lang: 'mermaid', cols: [0, 0, 0], closed: 1}
   let v = S('build_view')(src, [#{kind: 'mermaid', start: 1, end: 3, error: 'x'}, code], #{cellw: 8, cols: 20})
-  call assert_equal(['╭─ mermaid ' . repeat('─', 9), 'graph TD', '╰' . repeat('─', 19), 'mdview: x'], v.lines)
+  call assert_equal(['╭─ mermaid ' . repeat('─', 8) . '╮', 'graph TD', '╰' . repeat('─', 18) . '╯', 'mdview: x'], v.lines)
   let v = S('build_view')(src, [#{kind: 'mermaid', start: 1, end: 3, key: 'k', path: '/p',
         \ w: 8, h: 16, rows: 1}, code], #{cellw: 8, cols: 20})
   call assert_equal([''], v.lines)
@@ -336,7 +336,7 @@ function! Test_build_view_code_ambiwidth_double() abort
   finally
     set ambiwidth=single
   endtry
-  call assert_equal(['+-----', 'x', '+-----'], v.lines)
+  call assert_equal(['+----+', 'x', '+----+'], v.lines)
   call assert_equal('| ', v.props[1][2])
 endfunction
 

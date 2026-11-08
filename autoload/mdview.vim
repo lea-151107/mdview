@@ -761,9 +761,9 @@ endfunction
 
 function! s:code_chars() abort
   if &ambiwidth ==# 'double'
-    return #{tl: '+', bl: '+', h: '-', v: '|'}
+    return #{tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|'}
   endif
-  return #{tl: '╭', bl: '╰', h: '─', v: '│'}
+  return #{tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│'}
 endfunction
 
 " The Vim syntax for the language of a fence, or '' (none, or no syntax
@@ -836,7 +836,9 @@ function! s:code_line(v, src_lines, l, cx) abort
       call add(props, [len(t) + 2, 'mdview_code_lang', len(lang)])
       let t .= ' ' . lang . ' '
     endif
-    let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t)]))
+    " (Closed by a corner at the window's right edge; the code's lines have
+    " no bar there, as they may be longer than the window.)
+    let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t) - 1])) . ch.tr
     call add(props, [rule + 1, 'mdview_code_border', len(t) - rule])
     call s:add_line(a:v, t, a:l, props)
     return 1
@@ -847,7 +849,7 @@ function! s:code_line(v, src_lines, l, cx) abort
         \ - strdisplaywidth(pre)]))
   if get(r, 'closed', 0) && a:l == r.end
     let t = pre . ch.bl
-    let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t)]))
+    let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t) - 1])) . ch.br
     call add(props, [len(pre) + 1, 'mdview_code_border', len(t) - len(pre)])
     call s:add_line(a:v, t, a:l, props)
     return 1
