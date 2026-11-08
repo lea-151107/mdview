@@ -10,6 +10,7 @@ function! s:fake_goda() abort
   call writefile([
         \ 'function! goda#build(opts) abort',
         \ '  let g:built = a:opts',
+        \ '  let g:built_workspace = get(g:, ''goda#workspace'', ''unset'')',
         \ '  if exists(''g:build_error'') | throw g:build_error | endif',
         \ 'endfunction',
         \ 'function! goda#is_running(...) abort',
@@ -19,6 +20,7 @@ function! s:fake_goda() abort
         \ '  let g:registered = [a:plugin, a:starter, a:opts]',
         \ 'endfunction',
         \ ], d . '/autoload/goda.vim')
+  call writefile(['module github.com/Shougo/goda.vim', '', 'go 1.26'], d . '/go.mod')
   return d
 endfunction
 
@@ -35,6 +37,17 @@ function! Test_build_with_goda() abort
     silent call mdview#build()
     call assert_equal(#{name: 'mdview', dir: s:root . '/go', bin: goda . '/bin/mdview'},
           \ get(g:, 'built', {}))
+    " With the goda.vim installed (its Go module), as goda-pm.vim does; only
+    " for the build.
+    call assert_equal([resolve(goda)], g:built_workspace)
+    call assert_false(exists('g:goda#workspace'))
+    " That of the user (goda-pm.vim's, or [] for the versions of go.mod) is
+    " used as it is.
+    let g:goda#workspace = []
+    silent call mdview#build()
+    call assert_equal([], g:built_workspace)
+    call assert_equal([], g:goda#workspace)
+    unlet g:goda#workspace
     " Registered again, with the start of the binary: a start that failed is
     " tried again.
     call assert_equal('mdview', get(g:, 'registered', [''])[0])
@@ -45,10 +58,13 @@ function! Test_build_with_goda() abort
     let g:build_error = "goda-mdview: go build failed:\nmain.go:1: error"
     let msgs = execute('call mdview#build()')
     call assert_match('main.go:1: error', msgs)
+    " Said as mdview's, not with goda.vim's own "goda-" name.
+    call assert_match('mdview: go build failed', msgs)
+    call assert_notmatch('goda-mdview', msgs)
     call assert_false(exists('g:registered'))
   finally
     let &runtimepath = rtp
-    unlet! g:mdview_bin g:built g:build_error g:registered
+    unlet! g:mdview_bin g:built g:build_error g:registered g:built_workspace g:goda#workspace
     call delete(goda, 'rf')
   endtry
 endfunction
@@ -100,12 +116,18 @@ function! Test_root_follows_links() abort
   endtry
 endfunction
 
-" goda.vim names goda_{plugin}#build() in its messages to build again when
-" it exists (exists() does not load an autoload script): s:init() loads it.
-function! Test_goda_build_function() abort
-  call assert_true(filereadable(s:root . '/autoload/goda_mdview.vim'))
-  execute 'source' fnameescape(s:root . '/autoload/goda_mdview.vim')
-  call assert_true(exists('*goda_mdview#build'))
-  call assert_match("runtime autoload/goda_mdview.vim",
-        \ join(readfile(s:root . '/autoload/mdview.vim'), "\n"))
+" The build needs go/ of mdview itself: not that of a directory a plugin
+" manager shares with other plugins (copied or hard linked files).
+function! Test_is_mdview_module() abort
+  let Is = S('is_mdview_module')
+  call assert_true(Is(s:root . '/go'))
+  let d = tempname()
+  call mkdir(d, 'p')
+  try
+    call assert_false(Is(d))
+    call writefile(['module github.com/someone/other', '', 'go 1.26'], d . '/go.mod')
+    call assert_false(Is(d))
+  finally
+    call delete(d, 'rf')
+  endtry
 endfunction

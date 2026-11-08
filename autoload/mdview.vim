@@ -107,12 +107,6 @@ function! s:init() abort
     call s:warn('goda.vim is not in ''runtimepath''')
     return 0
   endif
-  " goda.vim names goda_mdview#build() in its messages to build again (when
-  " the binary does not go with this script) if it is defined: exists() does
-  " not load an autoload script.
-  if !exists('*goda_mdview#build')
-    runtime autoload/goda_mdview.vim
-  endif
   call s:register()
   highlight default link MdviewText Normal
   highlight default link MdviewError ErrorMsg
@@ -400,16 +394,53 @@ function! mdview#build() abort
     call s:warn('this goda.vim has no goda#build(): update goda.vim')
     return
   endif
+  let dir = s:root . '/go'
+  if !s:is_mdview_module(dir)
+    " A plugin manager copied (or hard linked) mdview into a directory it
+    " shares with other plugins: resolve() finds no way back.
+    call s:warn(dir . ' is not the Go module of mdview: install mdview in a'
+          \ . ' directory of its own (merged = false for goda-pm.vim and dpp.vim)')
+    return
+  endif
   echomsg 'mdview: building ' . s:bin() . ' ...'
   redraw
+  " The goda.vim installed builds the binary, as with goda-pm.vim (which sets
+  " g:goda#workspace): not the version of go.mod, which may no longer speak
+  " with the Vim script of goda.vim after an update. Set to [] by the user, it
+  " is left as it is.
+  let workspace = !exists('g:goda#workspace')
+  if workspace
+    let g:goda#workspace = s:goda_module()
+  endif
+  " (goda#build() says "goda-mdview: ...": "goda-" is goda.vim's own; its
+  " messages are given again as mdview's.)
   try
-    call goda#build(#{name: 'mdview', dir: s:root . '/go', bin: s:bin()})
+    silent call goda#build(#{name: 'mdview', dir: dir, bin: s:bin()})
   catch
-    call s:print_error(v:exception)
+    call s:print_error(substitute(v:exception, '^goda-mdview: ', 'mdview: ', ''))
     return
+  finally
+    if workspace
+      unlet g:goda#workspace
+    endif
   endtry
+  echomsg 'mdview: built ' . s:bin()
   call s:register()
   call s:refresh_all()
+endfunction
+
+" Is dir the Go module of mdview (go/ of mdview)?
+function! s:is_mdview_module(dir) abort
+  let f = a:dir . '/go.mod'
+  return filereadable(f) && get(readfile(f, '', 1), 0, '') =~# '^module github\.com/lea-151107/mdview/go\s*$'
+endfunction
+
+" The directory of the goda.vim installed (its Go module), in a list: [] when
+" it has no go.mod.
+function! s:goda_module() abort
+  let script = get(globpath(&runtimepath, 'autoload/goda.vim', 0, 1), 0, '')
+  let dir = fnamemodify(resolve(script), ':h:h')
+  return script !=# '' && filereadable(dir . '/go.mod') ? [dir] : []
 endfunction
 
 function! mdview#log() abort

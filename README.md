@@ -34,10 +34,15 @@ Vim の画像表示機能（`+image` の popup image）を使い、mermaid・デ
 mdview と goda.vim の 2 つを Vim のプラグインとして入れ、mdview の Go のプログラムをビルドします。
 dal と dam は、ビルドのときに Go が取ってきます。
 
-ビルドは `:MdviewBuild`（関数では `goda_mdview#build()`）で行います。goda.vim の `goda#build()` を使い、
+ビルドは `:MdviewBuild`（関数では `mdview#build()`）で行います。goda.vim の `goda#build()` を使い、
 goda-cmp.vim などと同じく、バイナリはプラグインの外の `~/.cache/vim/mdview/mdview` に作ります
 （`$XDG_CACHE_HOME` があれば `$XDG_CACHE_HOME/vim/mdview/mdview`。`g:mdview_bin` で変えられます）。
 ビルドが終わるまで Vim は待ちます。初めてのビルドは、モジュールを取ってくるので時間がかかります。
+
+Go 側は、`go/go.mod` に書いた版ではなく、入れてある goda.vim でビルドします（goda-pm.vim の
+`g:goda#workspace` と同じしくみ。go.work はバイナリの隣に作ります）。goda.vim を更新したあとも、
+`:MdviewBuild` するだけで、その goda.vim に合ったバイナリになります。`go.mod` の版でビルドしたいときは
+`let g:goda#workspace = []` にします。
 
 ### Vim のパッケージで入れる
 
@@ -59,7 +64,7 @@ Vim を起動して、次を実行します。
 
 ```vim
 Plug 'Shougo/goda.vim'
-Plug 'lea-151107/mdview', { 'do': { -> goda_mdview#build() } }
+Plug 'lea-151107/mdview', { 'do': { -> mdview#build() } }
 ```
 
 `:PlugInstall` と `:PlugUpdate` のあとにビルドします。
@@ -72,11 +77,12 @@ repo = 'Shougo/goda.vim'
 
 [[plugins]]
 repo = 'lea-151107/mdview'
-hook_post_update = 'call goda_mdview#build()'
+hook_post_update = 'call mdview#build()'
 ```
 
-goda-pm.vim では、入れた goda.vim の Go 側でビルドします（`g:goda#workspace`）。goda.vim を更新しても、
-mdview の Go 側が古い goda.vim のままになりません。
+mdview は、自分のディレクトリにある `go/` をビルドします。ほかのプラグインとまとめる（merged）とき、
+シンボリックリンクならそのままで動きます。Windows（ハードリンク）などでまとめた先から `go/` をたどれないときは、
+`:MdviewBuild` が `merged = false` にするよう案内するので、その指示に従ってください。
 
 ### ほかの方法で入れる
 
@@ -90,11 +96,13 @@ set runtimepath+=/path/to/mdview
 
 ### 更新したとき
 
-mdview や goda.vim を更新したら、ビルドし直します（上の vim-plug・goda-pm.vim の設定では自動で行います）。
+mdview や goda.vim を更新したら、`:MdviewBuild` でビルドし直します。上の vim-plug・goda-pm.vim の設定では、
+mdview を更新したときは自動で行います（vim-plug では、goda.vim だけを更新したときは行いません）。
 Go のプログラムと Vim script の版が合わないときは、goda.vim が
-「build the binary again (call goda_mdview#build())」と表示するので、`:MdviewBuild` を実行してください。
+「build the binary again」と表示するので、`:MdviewBuild` を実行してください。
 
 以前の版は、バイナリを mdview の中の `bin/mdview` に作っていました。今は使わないので、消してかまいません。
+vim-plug の `'do': 'cd go && go build ...'` や goda-pm.vim の `installerBuild` を設定していたら、上の書き方に替えてください。
 
 詳しくは `:help mdview` を見てください。
 

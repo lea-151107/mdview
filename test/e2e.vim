@@ -53,8 +53,8 @@ try
   call s:check(s:wait('s:drawn()'), 'not drawn: ' . string(s:viewer_lines())
         \ . ' ' . string(goda#log('mdview')))
 
-  " A binary of another version is refused, and goda.vim says how to build
-  " it again.
+  " A binary of another version is refused, and goda.vim says to build it
+  " again.
   call goda#stop('mdview')
   call goda#register('mdview', g:mdview_bin, #{version: 0})
   let err = ''
@@ -63,11 +63,11 @@ try
   catch
     let err = v:exception
   endtry
-  call s:check(err =~# 'call goda_mdview#build()', 'version error: ' . err)
+  call s:check(err =~# 'build the binary again', 'version error: ' . err)
 
   " The build registers the plugin again: the start that failed is tried
   " again, and the viewer is drawn again.
-  silent call goda_mdview#build()
+  silent call mdview#build()
   let err = ''
   try
     call goda#request('mdview', 'prune', $MDVIEW_E2E_CACHE, 30.0)

@@ -21,8 +21,11 @@ staticcheck:
 
 test: test-go test-vim
 
+# TestE2E runs Vim on files go test does not know (test/e2e.vim, autoload/):
+# never from the test cache.
 test-go:
-	cd $(GO_DIR) && CGO_ENABLED=0 go test ./...
+	cd $(GO_DIR) && CGO_ENABLED=0 go test -short ./...
+	cd $(GO_DIR) && CGO_ENABLED=0 go test -count=1 -run '^TestE2E$$' .
 
 test-vim:
 	@if [ -d test ]; then vim -Nu NONE -i NONE -es -S test/run.vim; fi

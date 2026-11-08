@@ -148,14 +148,19 @@ mdview と goda.vim の 2 つを Vim のプラグインとして入れます。m
 <
 Vim を起動して |:MdviewBuild| を実行し、Go のプログラムをビルドします。
 プラグインマネージャーで入れるときは、入れたあと・更新したあとに
-goda_mdview#build() を呼ぶように設定します。 >
+mdview#build() を呼ぶように設定します。 >
 
 	" vim-plug
-	Plug 'lea-151107/mdview', { 'do': { -> goda_mdview#build() } }
+	Plug 'lea-151107/mdview', { 'do': { -> mdview#build() } }
 <	# goda-pm.vim・dpp.vim の TOML >
-	hook_post_update = 'call goda_mdview#build()'
+	hook_post_update = 'call mdview#build()'
 <
 mdview や goda.vim を更新したときも、ビルドし直します。
+
+mdview は自分のディレクトリにある go/ をビルドします。プラグインマネー
+ジャーがほかのプラグインとまとめる（merged）ときは、シンボリックリンクなら
+そのままで動きます。まとめた先から go/ をたどれないとき（Windows のハード
+リンクなど）は、|:MdviewBuild| が merged = false にするよう案内します。
 
 キーに割り当てる例: >
 
@@ -199,13 +204,17 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 :MdviewBuild					*:MdviewBuild*
 	Go のプログラムを |g:mdview_bin| にビルドします。goda.vim の
 	goda#build() を使うので、ビルドが終わるまで Vim は待ちます。
-	goda-pm.vim を使っているときは、入れた goda.vim の Go 側でビルドし、
-	バイナリの隣に go.work を作ります（|g:goda#workspace|）。動いている
+	Go 側は go/go.mod の版ではなく、入れてある goda.vim でビルドし、
+	バイナリの隣に go.work を作ります（goda-pm.vim の |g:goda#workspace|
+	と同じしくみ。goda-pm.vim を使っていないときは、'runtimepath' の
+	goda.vim を使います。g:goda#workspace を [] にすると go.mod の版で
+	ビルドします）。goda.vim を更新したあとも、これだけで合ったバイナリに
+	なります。動いている
 	バイナリは止め、次の描画で新しいものを起動します。ビルドが失敗した
 	ときは、古いバイナリをそのまま使います。
-	関数では goda_mdview#build() です（goda.vim の名前の決まりに合わせた
-	もので、プラグインマネージャーのフックから呼べます）。バイナリと
-	Vim script の版が合わないとき、goda.vim はこれを呼ぶように表示します。
+	関数では mdview#build() です（プラグインマネージャーのフックから
+	呼べます）。バイナリと Vim script の版が合わないとき、goda.vim は
+	「build the binary again」と表示するので、これを実行します。
 
 :MdviewLog					*:MdviewLog*
 	Go 側のログ（goda#log('mdview')）を表示します。
