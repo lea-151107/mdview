@@ -95,3 +95,72 @@ function! Test_build_view_headings_and_inline_math() abort
         \ [2, 'mdview_math', 4, 11]], v.props)
   call assert_equal([1, 2], v.map)
 endfunction
+
+" A table result as the Go side returns it.
+function! s:table(start, end, align, lines, rows, ...) abort
+  return #{kind: 'table', start: a:start, end: a:end, indent: a:0 ? a:1 : 0,
+        \ table: #{align: a:align, lines: a:lines, rows: a:rows}}
+endfunction
+
+function! Test_build_view_table() abort
+  let src = Src(['x', '| 左 | b |', '|:-:|--:|', '| **太字** | 1 |', '| c |', 'y'])
+  let r = s:table(2, 5, ['c', 'r'], [2, 4, 5], [
+        \ [[['左', '']], [['b', '']]],
+        \ [[['太字', 'b']], [['1', '']]],
+        \ [[['c', '']], []]])
+  let v = S('build_view')(src, [r])
+  call assert_equal(['x',
+        \ '┌──────┬───┐',
+        \ '│  左  │ b │',
+        \ '├──────┼───┤',
+        \ '│ 太字 │ 1 │',
+        \ '│  c   │   │',
+        \ '└──────┴───┘',
+        \ 'y'], v.lines)
+  " Header, delimiter and rows map to their lines; the borders to the rows
+  " next to them.
+  call assert_equal([1, 3, 4, 5, 6, 8], v.map)
+  call assert_equal([1, 2, 2, 3, 4, 5, 5, 6], v.rmap)
+  let props = filter(copy(v.props), {_, p -> p[0] == 5})
+  call assert_equal([[5, 'mdview_table', len(v.lines[4]), 1], [5, 'mdview_table_border', 3, 1],
+        \ [5, 'mdview_bold', 6, 5], [5, 'mdview_table_border', 3, 12],
+        \ [5, 'mdview_table_border', 3, 18]], props)
+  " The header is bold.
+  call assert_equal(2, len(filter(copy(v.props), {_, p -> p[1] ==# 'mdview_table_header'})))
+endfunction
+
+function! Test_build_view_table_wrap() abort
+  let src = Src(['| a | b |', '|---|---|', '| 長い日本語のセル | one two three |'])
+  let r = s:table(1, 3, ['', ''], [1, 3], [
+        \ [[['a', '']], [['b', '']]],
+        \ [[['長い日本語のセル', '']], [['one two three', '']]]])
+  let v = S('build_view')(src, [r], #{cellw: 8, cols: 20})
+  call assert_equal([
+        \ '┌────────┬─────────┐',
+        \ '│ a      │ b       │',
+        \ '├────────┼─────────┤',
+        \ '│ 長い日 │ one two │',
+        \ '│ 本語の │ three   │',
+        \ '│ セル   │         │',
+        \ '└────────┴─────────┘'], v.lines)
+  call assert_true(max(map(copy(v.lines), 'strdisplaywidth(v:val)')) <= 20)
+  call assert_equal([2, 3, 4], v.map)
+endfunction
+
+function! Test_build_view_table_line_break_and_quote() abort
+  let src = Src(['> | a |', '> |---|', '> | x<br>y |'])
+  let r = s:table(1, 3, [''], [1, 3], [[[['a', '']]], [[['x', ''], ["\n", ''], ['y', '']]]], 2)
+  let v = S('build_view')(src, [r])
+  call assert_equal(['> ┌───┐', '> │ a │', '> ├───┤', '> │ x │', '> │ y │', '> └───┘'], v.lines)
+  call assert_equal([2, 3, 4], v.map)
+endfunction
+
+function! Test_build_view_table_image_below() abort
+  let src = Src(['| ![a](a.png) |', '|---|', 'z'])
+  let r = s:table(1, 2, [''], [1], [[[['[a]', 'image']]]])
+  let img = #{kind: 'image', start: 1, end: 1, keep: 1, key: 'k', path: '/p', w: 8, h: 32, rows: 2, indent: 2}
+  let v = S('build_view')(src, [r, img])
+  call assert_equal(['┌─────┐', '│ [a] │', '├─────┤', '└─────┘', '', '', 'z'], v.lines)
+  call assert_equal([[5, 6, 0]], map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
+  call assert_equal([2, 3, 7], v.map)
+endfunction

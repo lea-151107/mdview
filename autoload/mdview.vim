@@ -14,7 +14,7 @@
 
 let s:root = expand('<sfile>:p:h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 2
+let s:script_version = 3
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -72,12 +72,15 @@ function! s:init() abort
   if empty(prop_type_get('mdview_heading'))
     call prop_type_add('mdview_heading', #{highlight: 'MdviewHeading', combine: v:true})
   endif
+  call s:init_table()
   augroup mdview_global
     autocmd!
     autocmd WinClosed * call s:close_popups(str2nr(expand('<amatch>')))
     autocmd BufWinEnter,WinEnter,BufWinLeave * call timer_start(0, {-> s:sync_all()})
     autocmd WinScrolled * call s:on_scrolled()
-    autocmd WinResized * call s:on_resized()
+    " VimResized: the terminal was resized; it comes at once, while WinResized
+    " waits for the next key.
+    autocmd WinResized,VimResized * call s:on_resized()
     autocmd ColorScheme * call s:refresh_all()
     autocmd OptionSet background call s:refresh_all()
     if exists('##TermResponseAll')
@@ -421,7 +424,8 @@ endfunction
 " kept (an image inside text): then the lines stay and the images follow.
 " The images of a group go side by side while they fit opts.cols, each row of
 " images as tall as its tallest. Headings add bold to their lines; inline
-" math replaces part of a line. opts: {cellw, cols, prev}; prev maps
+" math replaces part of a line. A table is laid out from its cells, with the
+" images of its cells below it. opts: {cellw, cols, prev}; prev maps
 " "kind:start" to an earlier image result, shown while a block is redrawn.
 function! s:build_view(src, results, ...) abort
   let opts = extend(#{cellw: 8, cols: 80, prev: {}}, a:0 ? a:1 : {})
@@ -442,13 +446,21 @@ function! s:build_view(src, results, ...) abort
         endif
         call add(inline[r.start], [r.col, r.col_end, r.text[0]])
       endif
+    elseif r.kind ==# 'table'
+      if empty(groups) || r.start > groups[-1].end
+        call add(groups, #{start: r.start, end: r.end, keep: 0, items: [], table: r})
+      endif
     else
       if get(r, 'pending', 0) && has_key(opts.prev, r.kind . ':' . r.start)
         " Still drawing: keep showing the image it had.
         let r = extend(copy(opts.prev[r.kind . ':' . r.start]),
               \ #{start: r.start, end: r.end, keep: get(r, 'keep', 0), indent: get(r, 'indent', 0)})
       endif
-      if !empty(groups) && groups[-1].start == r.start && groups[-1].end == r.end
+      if !empty(groups) && has_key(groups[-1], 'table')
+            \ && r.start >= groups[-1].start && r.start <= groups[-1].end
+        " An image in a cell: drawn below the table.
+        call add(groups[-1].items, extend(copy(r), #{indent: get(groups[-1].table, 'indent', 0)}))
+      elseif !empty(groups) && groups[-1].start == r.start && groups[-1].end == r.end
             \ && groups[-1].keep == get(r, 'keep', 0)
         call add(groups[-1].items, r)
       elseif empty(groups) || r.start > groups[-1].end
@@ -465,19 +477,21 @@ function! s:build_view(src, results, ...) abort
       let i += 1
     endwhile
     let failed = filter(copy(g.items), {_, r -> empty(get(r, 'path', '')) && empty(get(r, 'text', []))})
-    if g.keep || !empty(failed)
+    let first_line = src_lines[g.start - 1]
+    if has_key(g, 'table')
+      call s:add_table(v, g.table, first_line, opts)
+    elseif g.keep || !empty(failed)
       for k in range(g.start, g.end)
         call s:copy_line(v, src_lines, k, headings, inline)
       endfor
     else
       call extend(v.map, repeat([len(v.lines) + 1], g.end - g.start + 1))
     endif
-    let first_line = src_lines[g.start - 1]
     " Image rows keep the quote marks of the block ("> > "), so the quote's
     " bar goes on beside the image.
     let quote = substitute(matchstr(first_line, '^\s*\%(>\s\?\)\+'), '\s\+$', '', '')
     let images = filter(copy(g.items), {_, r -> !empty(get(r, 'path', ''))})
-    call s:add_images(v, images, g.start, quote, opts, first_line)
+    call s:add_images(v, images, has_key(g, 'table') ? g.end : g.start, quote, opts, first_line)
     for r in g.items
       if !empty(get(r, 'path', ''))
         continue
@@ -501,6 +515,274 @@ function! s:build_view(src, results, ...) abort
     let i += 1
   endwhile
   return v
+endfunction
+
+" ---------------------------------------------------------------------------
+" Tables
+
+" The property type of each style of a table's text (see blocks.Span).
+let s:table_styles = #{b: 'mdview_bold', i: 'mdview_italic', code: 'mdview_code',
+      \ strike: 'mdview_strike', u: 'mdview_underline', link: 'mdview_link',
+      \ image: 'mdview_image', math: 'mdview_math'}
+
+function! s:init_table() abort
+  highlight default link MdviewTable Normal
+  highlight default link MdviewTableBorder Comment
+  highlight default link MdviewCode String
+  highlight default link MdviewLink Underlined
+  highlight default link MdviewImage Special
+  " Only attributes: combined with the colors under them.
+  highlight default MdviewTableHeader term=bold cterm=bold gui=bold
+  highlight default MdviewBold term=bold cterm=bold gui=bold
+  highlight default MdviewItalic term=italic cterm=italic gui=italic
+  highlight default MdviewStrike term=strikethrough cterm=strikethrough gui=strikethrough
+  highlight default MdviewUnderline term=underline cterm=underline gui=underline
+  " The whole line: Normal without the markdown syntax (which would
+  " highlight the cells' text as Markdown again).
+  if empty(prop_type_get('mdview_table'))
+    call prop_type_add('mdview_table', #{highlight: 'MdviewTable', combine: v:false, priority: 10})
+  endif
+  for [name, hl] in [['mdview_table_border', 'MdviewTableBorder'],
+        \ ['mdview_table_header', 'MdviewTableHeader'], ['mdview_bold', 'MdviewBold'],
+        \ ['mdview_italic', 'MdviewItalic'], ['mdview_code', 'MdviewCode'],
+        \ ['mdview_strike', 'MdviewStrike'], ['mdview_underline', 'MdviewUnderline'],
+        \ ['mdview_link', 'MdviewLink'], ['mdview_image', 'MdviewImage']]
+    if empty(prop_type_get(name))
+      call prop_type_add(name, #{highlight: hl, combine: v:true, priority: 20})
+    endif
+  endfor
+endfunction
+
+" The characters a table is drawn with: box drawing, or ASCII when they would
+" be two cells wide.
+function! s:table_chars() abort
+  if &ambiwidth ==# 'double'
+    return #{h: '-', v: '|', tl: '+', tm: '+', tr: '+', ml: '+', mm: '+', mr: '+',
+          \ bl: '+', bm: '+', br: '+'}
+  endif
+  return #{h: '─', v: '│', tl: '┌', tm: '┬', tr: '┐', ml: '├', mm: '┼', mr: '┤',
+        \ bl: '└', bm: '┴', br: '┘'}
+endfunction
+
+" A cell's runs [[text, style], ...] as lines of characters [[char, style,
+" width], ...], split at line breaks.
+function! s:cell_lines(runs) abort
+  let lines = [[]]
+  for [text, style] in a:runs
+    if text ==# "\n"
+      call add(lines, [])
+      continue
+    endif
+    for c in split(substitute(text, '[\t\r\n]', ' ', 'g'), '\zs')
+      call add(lines[-1], [c, style, strdisplaywidth(c)])
+    endfor
+  endfor
+  return lines
+endfunction
+
+function! s:chars_width(chars) abort
+  let w = 0
+  for c in a:chars
+    let w += c[2]
+  endfor
+  return w
+endfunction
+
+" Characters a line does not start with, and those it does not end with.
+let s:no_start = '、。，．・：；？！ー…‥）］｝」』】〉》〕ゃゅょっぁぃぅぇぉャュョッァィゥェォ'
+let s:no_end = '（［｛「『【〈《〔'
+
+" Where a line of characters may be broken before index k: at a space, and
+" before or after a wide (CJK) character, but not before closing punctuation
+" or after opening.
+function! s:can_break(chars, k) abort
+  if a:k <= 0
+    return 0
+  endif
+  let [c, p] = [a:chars[a:k], a:chars[a:k - 1]]
+  if c[0] ==# ' '
+    return 1
+  endif
+  if stridx(s:no_start, c[0]) >= 0 || stridx(s:no_end, p[0]) >= 0
+    return 0
+  endif
+  return c[2] > 1 || p[2] > 1
+endfunction
+
+function! s:trim_chars(chars) abort
+  let [a, b] = [0, len(a:chars) - 1]
+  while a <= b && a:chars[a][0] ==# ' '
+    let a += 1
+  endwhile
+  while b >= a && a:chars[b][0] ==# ' '
+    let b -= 1
+  endwhile
+  return a:chars[a : b]
+endfunction
+
+" Wrap a line of characters to width w: at the last place it may be broken,
+" or anywhere in a word longer than w.
+function! s:wrap_chars(chars, w) abort
+  let out = []
+  let cur = []
+  let curw = 0
+  let brk = -1
+  for c in a:chars
+    if empty(cur) && c[0] ==# ' '
+      continue
+    endif
+    if curw + c[2] > a:w && !empty(cur)
+      if s:can_break(cur + [c], len(cur))
+        " Right before c.
+        call add(out, s:trim_chars(cur))
+        let cur = []
+      elseif brk > 0
+        call add(out, s:trim_chars(cur[: brk - 1]))
+        let cur = s:trim_chars(cur[brk :])
+      else
+        call add(out, cur)
+        let cur = []
+      endif
+      let curw = s:chars_width(cur)
+      let brk = -1
+      for k in range(1, max([0, len(cur) - 1]))
+        if s:can_break(cur, k)
+          let brk = k
+        endif
+      endfor
+      if empty(cur) && c[0] ==# ' '
+        continue
+      endif
+    endif
+    call add(cur, c)
+    let curw += c[2]
+    if s:can_break(cur, len(cur) - 1)
+      let brk = len(cur) - 1
+    endif
+  endfor
+  if !empty(cur) || empty(out)
+    call add(out, s:trim_chars(cur))
+  endif
+  return out
+endfunction
+
+" The column widths of a table: as wide as their cells, the widest narrowed
+" one by one while the table is wider than avail (down to 3, or the cell).
+function! s:table_widths(cells, ncols, avail) abort
+  let widths = repeat([1], a:ncols)
+  for row in a:cells
+    for j in range(min([len(row), a:ncols]))
+      for l in row[j]
+        let widths[j] = max([widths[j], s:chars_width(l)])
+      endfor
+    endfor
+  endfor
+  let least = map(copy(widths), {_, w -> min([w, 3])})
+  let total = eval(join(widths, '+'))
+  while total > a:avail
+    let j = -1
+    for k in range(a:ncols)
+      if widths[k] > least[k] && (j < 0 || widths[k] > widths[j])
+        let j = k
+      endif
+    endfor
+    if j < 0
+      break
+    endif
+    let widths[j] -= 1
+    let total -= 1
+  endwhile
+  return widths
+endfunction
+
+" Add table result r to the viewer: lines boxed with s:table_chars(), its
+" cells wrapped to fit opts.cols, and the source lines of its rows mapped to
+" their first lines (the delimiter row to the line under the header).
+function! s:add_table(v, r, first_line, opts) abort
+  let t = a:r.table
+  let ch = s:table_chars()
+  let ncols = max([len(t.align)] + map(copy(t.rows), 'len(v:val)'))
+  let align = t.align + repeat([''], ncols - len(t.align))
+  let quote = substitute(matchstr(a:first_line, '^\s*\%(>\s\?\)\+'), '\s\+$', '', '')
+  let indent = s:display_indent(a:first_line, get(a:r, 'indent', 0))
+  let prefix = quote . repeat(' ', max([0, indent - strdisplaywidth(quote)]))
+  let cells = map(copy(t.rows), {_, row -> map(copy(row), {_, c -> s:cell_lines(c)})})
+  let widths = s:table_widths(cells, ncols,
+        \ a:opts.cols - strdisplaywidth(prefix) - (ncols * 3 + 1))
+
+  let Rule = {a, b, c -> a . join(map(copy(widths), {_, w -> repeat(ch.h, w + 2)}), b) . c}
+  let Border = {line, src -> s:add_line(a:v, prefix . line, src,
+        \ [[len(prefix) + 1, 'mdview_table', len(line)], [len(prefix) + 1, 'mdview_table_border', len(line)]])}
+  let src_lines = t.lines
+  let first = {}   " row index -> its first viewer line
+  call Border(Rule(ch.tl, ch.tm, ch.tr), src_lines[0])
+  for i in range(len(cells))
+    let wrapped = []
+    for j in range(ncols)
+      let lines = []
+      for l in get(cells[i], j, [[]])
+        call extend(lines, s:wrap_chars(l, widths[j]))
+      endfor
+      call add(wrapped, lines)
+    endfor
+    let first[i] = len(a:v.lines) + 1
+    for k in range(max(map(copy(wrapped), 'len(v:val)')))
+      let line = prefix
+      let props = []
+      for j in range(ncols)
+        call add(props, [len(line) + 1, 'mdview_table_border', len(ch.v)])
+        let line .= ch.v . ' '
+        let chars = get(wrapped[j], k, [])
+        let pad = widths[j] - s:chars_width(chars)
+        let left = align[j] ==# 'r' ? pad : align[j] ==# 'c' ? pad / 2 : 0
+        let line .= repeat(' ', max([0, left]))
+        let cell_start = len(line)
+        " Runs of one style, as properties.
+        let run = ''
+        let run_start = len(line)
+        for c in chars + [['', "\x01", 0]]
+          if c[1] !=# run
+            for s in split(run, ',')
+              if has_key(s:table_styles, s) && len(line) > run_start
+                call add(props, [run_start + 1, s:table_styles[s], len(line) - run_start])
+              endif
+            endfor
+            let run = c[1]
+            let run_start = len(line)
+          endif
+          let line .= c[0]
+        endfor
+        if i == 0 && len(line) > cell_start
+          call add(props, [cell_start + 1, 'mdview_table_header', len(line) - cell_start])
+        endif
+        let line .= repeat(' ', max([0, pad - left])) . ' '
+      endfor
+      call add(props, [len(line) + 1, 'mdview_table_border', len(ch.v)])
+      let line .= ch.v
+      call insert(props, [len(prefix) + 1, 'mdview_table', len(line) - len(prefix)])
+      call s:add_line(a:v, line, src_lines[i], props)
+    endfor
+    if i == 0
+      let first[-1] = len(a:v.lines) + 1   " the delimiter row
+      call Border(Rule(ch.ml, ch.mm, ch.mr), a:r.start + 1)
+    endif
+  endfor
+  call Border(Rule(ch.bl, ch.bm, ch.br), src_lines[-1])
+
+  " Each source line of the table maps to the row it belongs to.
+  let rows = [[src_lines[0], first[0]], [a:r.start + 1, first[-1]]]
+  for i in range(1, len(src_lines) - 1)
+    call add(rows, [src_lines[i], first[i]])
+  endfor
+  for l in range(a:r.start, a:r.end)
+    let to = rows[0][1]
+    for [sl, vl] in rows
+      if sl <= l
+        let to = vl
+      endif
+    endfor
+    call add(a:v.map, to)
+  endfor
 endfunction
 
 " The display column of byte offset col in line (tabs expanded).

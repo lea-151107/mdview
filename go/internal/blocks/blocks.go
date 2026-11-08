@@ -1,6 +1,6 @@
 // Package blocks finds the parts of a Markdown document that mdview draws:
 // mermaid code blocks, display math, images, inline math, and the headings
-// it shows in bold. It parses with goldmark, so blocks inside quotes and
+// it shows in bold, and tables. It parses with goldmark, so blocks inside quotes and
 // lists are found, and $$ inside code, HTML or comments is left alone.
 package blocks
 
@@ -28,6 +28,7 @@ const (
 	Image      Kind = "image"
 	Heading    Kind = "heading"     // not drawn; its lines are shown in bold
 	InlineMath Kind = "inline_math" // $…$ inside a line, shown as text
+	Table      Kind = "table"       // a GFM table, laid out by Vim from Block.Table
 )
 
 // Block is one part of the document. Start and End are 1-based line
@@ -38,20 +39,25 @@ const (
 // Keep is set: then the lines stay and the image goes below End (an image
 // inside a line of text).
 //
+// For Table, Start..End are the table's lines (header to last row), replaced
+// by the table Vim draws. Images in its cells are Image blocks (Keep) of
+// their rows.
+//
 // For InlineMath, Start == End is the line, and Col and ColEnd are the
 // 0-based byte range of the $…$ in that line.
 type Block struct {
 	Kind   Kind
 	Start  int
 	End    int
-	Source string // diagram or formula source
-	Path   string // image path or URL as written (Image)
-	Alt    string // alt text (Image)
-	Keep   bool   // keep the lines and put the image below them (Image)
-	Indent int    // columns the block is indented by (quotes, lists)
-	Col    int    // InlineMath: byte offset of $ in the line
-	ColEnd int    // InlineMath: byte offset after the closing $
-	Width  int    // Image: width in pixels from <img width="…">, 0 if none
+	Source string     // diagram or formula source
+	Path   string     // image path or URL as written (Image)
+	Alt    string     // alt text (Image)
+	Keep   bool       // keep the lines and put the image below them (Image)
+	Indent int        // columns the block is indented by (quotes, lists)
+	Col    int        // InlineMath: byte offset of $ in the line
+	ColEnd int        // InlineMath: byte offset after the closing $
+	Width  int        // Image: width in pixels from <img width="…">, 0 if none
+	Table  *TableData // Table: its cells
 }
 
 var (
@@ -134,7 +140,14 @@ func Parse(lines []string) []Block {
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
 			out = append(out, d.htmlImages(n.Segments, false, text.Segment{}, true)...)
+		case *extast.Table:
+			if blk, ok := d.table(n); ok {
+				out = append(out, blk)
+			}
 		case *MathInline:
+			if inTableCell(n) {
+				return ast.WalkContinue, nil // part of the table's cell
+			}
 			l := d.line(n.Start)
 			out = append(out, Block{Kind: InlineMath, Start: l, End: l, Source: n.Expr,
 				Col: d.col(n.Start), ColEnd: d.col(n.Start) + (n.Stop - n.Start)})

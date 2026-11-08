@@ -213,7 +213,7 @@ func TestContract(t *testing.T) {
 		"# Title",
 		"```mermaid", "graph TD", "  A-->B", "```",
 		"text $x^2$ and ![a](a.png) here",
-		"| ![a](a.png) | cell |",
+		"| ![a](a.png) | **cell** |", "|:--|--:|", "| $y$ | b |",
 		"> ![a](a.png)",
 		"```mermaid", "graph TD", "  A -->", "```",
 	}

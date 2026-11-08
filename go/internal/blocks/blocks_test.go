@@ -165,6 +165,7 @@ func TestInlineMath(t *testing.T) {
 func FuzzParseRanges(f *testing.F) {
 	f.Add("# t\n```mermaid\ngraph TD\n```\n$$x$$\n![a](b.png) c $y$\n> $$\n> z\n> $$\n")
 	f.Add("- a\n\n  ```math\n  x\n  ```\n\\[ y \\]\n[![i](i.png)](u)")
+	f.Add("| a | b |\n|---|:-:|\n| ![x](x.png) $y$ | z<br>w |\n| c |\n> | q |\n> |---|")
 	f.Fuzz(func(t *testing.T, s string) {
 		lines := strings.Split(s, "\n")
 		prev := 0
@@ -182,6 +183,18 @@ func FuzzParseRanges(f *testing.F) {
 					t.Fatalf("overlapping block %+v (last end %d)", b, lastEnd)
 				}
 				lastEnd = b.End
+			}
+			if b.Kind == Table {
+				tb := b.Table
+				if tb == nil || len(tb.Rows) != len(tb.Lines) || tb.Lines[0] != b.Start ||
+					tb.Lines[len(tb.Lines)-1] > b.End || b.Indent > len(lines[b.Start-1]) {
+					t.Fatalf("bad table %+v %+v", b, tb)
+				}
+				for i := 1; i < len(tb.Lines); i++ {
+					if tb.Lines[i] <= tb.Lines[i-1] {
+						t.Fatalf("table lines out of order %v", tb.Lines)
+					}
+				}
 			}
 			if b.Kind == InlineMath {
 				l := lines[b.Start-1]
@@ -227,5 +240,65 @@ func TestReviewCases(t *testing.T) {
 	// Shell variables are not inline math.
 	if got := ofKind(Parse([]string{"export PATH=$HOME/bin:$PATH now", "a $x$, b"}), InlineMath); len(got) != 1 || got[0].Source != "x" {
 		t.Fatalf("inline math: %#v", got)
+	}
+}
+
+func TestTable(t *testing.T) {
+	doc := strings.Split("intro\n\n"+
+		"| 左 | 中 | 右 |\n"+
+		"|:--|:-:|--:|\n"+
+		"| **b** *i* ***bi*** | `c` ~~s~~ <u>u</u> | a\\|b &amp; \\* |\n"+
+		"| x<br>y | [l](u) <https://x.y> | ![alt](a.png) $x^2$ |\n"+
+		"| only |\n", "\n")
+	bs := Parse(doc)
+	tables := ofKind(bs, Table)
+	if len(tables) != 1 {
+		t.Fatalf("tables: %#v", bs)
+	}
+	tb := tables[0]
+	if tb.Start != 3 || tb.End != 7 || tb.Indent != 0 {
+		t.Fatalf("range %d-%d indent %d", tb.Start, tb.End, tb.Indent)
+	}
+	want := &TableData{
+		Align: []string{"l", "c", "r"},
+		Lines: []int{3, 5, 6, 7},
+		Rows: [][][]Span{
+			{{{"左", ""}}, {{"中", ""}}, {{"右", ""}}},
+			{{{"b", "b"}, {" ", ""}, {"i", "i"}, {" ", ""}, {"bi", "b,i"}},
+				{{"c", "code"}, {" ", ""}, {"s", "strike"}, {" ", ""}, {"u", "u"}},
+				{{"a|b & *", ""}}},
+			{{{"x", ""}, {"\n", ""}, {"y", ""}},
+				{{"l", "link"}, {" ", ""}, {"https://x.y", "link"}},
+				{{"[alt]", "image"}, {" ", ""}, {"x^2", "math"}}},
+			{{{"only", ""}}, {}, {}},
+		},
+	}
+	if !reflect.DeepEqual(tb.Table, want) {
+		t.Fatalf("got\n%#v\nwant\n%#v", tb.Table, want)
+	}
+	// The image in a cell is drawn below its row; the formula is part of
+	// the cell, not inline math of the line.
+	if imgs := ofKind(bs, Image); len(imgs) != 1 || imgs[0].Start != 6 || !imgs[0].Keep {
+		t.Fatalf("images: %#v", imgs)
+	}
+	if m := ofKind(bs, InlineMath); len(m) != 0 {
+		t.Fatalf("inline math: %#v", m)
+	}
+}
+
+func TestTableNested(t *testing.T) {
+	cases := []struct {
+		doc                string
+		start, end, indent int
+	}{
+		{"> | a | b |\n> |---|---|\n> | 1 | 2 |", 1, 3, 2},
+		{"- item\n\n  a | b\n  --|--\n  c | d", 3, 5, 2},
+		{"| a |\n|---|", 1, 2, 0},
+	}
+	for _, c := range cases {
+		tb := ofKind(Parse(strings.Split(c.doc, "\n")), Table)
+		if len(tb) != 1 || tb[0].Start != c.start || tb[0].End != c.end || tb[0].Indent != c.indent {
+			t.Errorf("%q: %#v", c.doc, tb)
+		}
 	}
 }

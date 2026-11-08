@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,7 +32,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 2
+const scriptVersion = 3
 
 const blockTimeout = 15 * time.Second
 
@@ -127,6 +128,41 @@ type result struct {
 	// replaces it).
 	Col    int `json:"col"`
 	ColEnd int `json:"col_end"`
+	// Table: the cells of a table, laid out by Vim.
+	Table *tableResult `json:"table,omitempty"`
+}
+
+// tableResult is a table for Vim: rows[row][column] is a list of
+// [text, style] runs (see blocks.Span); lines[row] is the source line of the
+// row.
+type tableResult struct {
+	Align []string        `json:"align"`
+	Rows  [][][][2]string `json:"rows"`
+	Lines []int           `json:"lines"`
+}
+
+// tableOf converts a table, with its inline math as text when inlineMath.
+func tableOf(t *blocks.TableData, inlineMath bool) *tableResult {
+	out := &tableResult{Align: t.Align, Lines: t.Lines, Rows: make([][][][2]string, len(t.Rows))}
+	for i, row := range t.Rows {
+		out.Rows[i] = make([][][2]string, len(row))
+		for j, cell := range row {
+			out.Rows[i][j] = make([][2]string, 0, len(cell))
+			for _, sp := range cell {
+				text := sp.Text
+				if strings.Contains(sp.Style, "math") {
+					text = "$" + text + "$"
+					if inlineMath {
+						if t, err := dal.RenderLine(sp.Text, dal.LineOptions{}); err == nil && t != "" {
+							text = t
+						}
+					}
+				}
+				out.Rows[i][j] = append(out.Rows[i][j], [2]string{text, sp.Style})
+			}
+		}
+	}
+	return out
 }
 
 // render starts drawing a buffer and returns at once. The results go to
@@ -277,6 +313,9 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 		switch b.Kind {
 		case blocks.Heading:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+		case blocks.Table:
+			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Indent: b.Indent,
+				Table: tableOf(b.Table, req.InlineMath != 0)}
 		case blocks.InlineMath:
 			if req.InlineMath != 0 {
 				if text, err := dal.RenderLine(b.Source, dal.LineOptions{}); err == nil && text != "" {

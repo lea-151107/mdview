@@ -4,8 +4,9 @@ Vim の画像表示機能（`+image` の popup image）を使い、mermaid・デ
 描いた状態で Markdown を読めるビューアです。`:Mdview` で右に（`:Mdview here` で同じウィンドウに）
 開きます。Markdown のファイル自体は普段どおりのエディタで開きます。
 
-- 引用・リストの中のブロック、参照形式やリンク付きの画像、HTML の `<img>`、文中・表の中の画像も描く（goldmark で解析）
+- 引用・リストの中のブロック、参照形式やリンク付きの画像、HTML の `<img>`、文中の画像も描く（goldmark で解析）。表のセルの画像は表の下に描く
 - インライン数式 `$…$` を `x²` のような 1 行のテキストにする
+- 表を罫線で囲み、列を揃えて描く。セルの書式はハイライトで表し、幅に収まらないときはセルの中で折り返す
 - 編集中も描き直す。時間のかかる図は後から出し、ほかのブロックを先に表示する
 - BMP・SVG（rsvg-convert）・http(s) の画像（`g:mdview_remote`）
 
@@ -43,4 +44,4 @@ make build   # bin/mdview
 echo '{"method":"goda.plugins"}' | ./bin/mdview --transport=jsonl
 ```
 
-確認用の文書: `testdata/full.md`（書式・図・数式・画像の一覧）、`testdata/nested.md`（入れ子と文中の要素）
+確認用の文書: `testdata/full.md`（書式・表・図・数式・画像の一覧）、`testdata/nested.md`（入れ子と文中の要素）
