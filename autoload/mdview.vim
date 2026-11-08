@@ -1400,19 +1400,46 @@ endfunction
 " ---------------------------------------------------------------------------
 " Following the source's cursor
 
+" In a viewer window that follows the source: its line vl (the cursor's)
+" off lines below the top, as in the source, then scrolled down until line
+" want shows (counting wrapped lines), as long as vl stays in the window.
+function! s:follow_view(vl, off, want) abort
+  call winrestview(#{topline: max([1, a:vl - a:off]), lnum: a:vl, col: 0})
+  while line('w$') < a:want && line('w0') < a:vl
+    execute "normal! \<C-e>"
+  endwhile
+  call cursor(a:vl, 1)
+endfunction
+
 function! s:follow(src) abort
   let state = s:state(a:src)
   if empty(state) || bufnr('%') != a:src || state.here || s:syncing
     return
   endif
   let vl = get(state.map, line('.') - 1, get(state.map, -1, 1))
+  " The last viewer line of the cursor's line: an image (or a table) takes
+  " the lines up to the viewer line of the next source line that has its own.
+  let l = line('.')
+  while l < len(state.map) && state.map[l] <= vl
+    let l += 1
+  endwhile
+  let vl_end = l < len(state.map) ? state.map[l] - 1 : len(state.rmap)
+  " Where the cursor is in the source window. winline() first: it brings
+  " the window's top up to date after a jump (CursorMoved comes before the
+  " redraw), which line('w$') does not.
+  let off = winline() - 1
+  " Whether the source window shows the end of the source.
+  let at_end = line('w$') >= line('$')
   let s:syncing = 1
   try
     for win in win_findbuf(state.viewer)
-      let height = winheight(win)
-      let off = min([winline() - 1, height - 1])
-      let top = max([1, vl - off])
-      call win_execute(win, 'call winrestview(#{topline: ' . top . ', lnum: ' . vl . ', col: 0})')
+      " The whole of the cursor's image (the cursor at the bottom of the
+      " source window would leave it below the viewer's), and the end of the
+      " viewer when the source shows its end: the source cannot scroll
+      " further to bring it in.
+      let want = at_end ? len(state.rmap) : vl_end
+      call win_execute(win, printf('call s:follow_view(%d, %d, %d)',
+            \ vl, min([off, winheight(win) - 1]), want))
       call s:update_modes(win)
     endfor
   finally
