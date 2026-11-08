@@ -1,5 +1,9 @@
 github.com/Shougo/goda.vim v0.7.2 h1:3H2C8HmrMlrpUy0Jm2eCF04phLLQUnyfpe72Xf/61QM=
 github.com/Shougo/goda.vim v0.7.2/go.mod h1:ohGPksso9XrqpdVRLS3TzoUtz2x3yMT8x+x+MnMpbM8=
+github.com/lea-151107/dal v0.4.14 h1:bX8r3T0HkmPDK7gIytB94yE8vC54PXb0g/FsRzkar5g=
+github.com/lea-151107/dal v0.4.14/go.mod h1:0s2TneZvw/izOdCRufBZwGFhWMQn/yGtHA55nsdAKek=
+github.com/lea-151107/dam v0.6.34 h1:HVeV5uvdCz2lnMY26HF7pITJcV66cULJOsgeDuboC70=
+github.com/lea-151107/dam v0.6.34/go.mod h1:H+62VC7ILFd6pi/H9vTamXiqG7Xo9h8W1r6aD6+6uAc=
 github.com/yuin/goldmark v1.8.7 h1:XT/tNqCIbabh0ln675w4x3dv04kQBKi8NwYqi9IJaxI=
 github.com/yuin/goldmark v1.8.7/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
 golang.org/x/image v0.47.0 h1:za/8gVz++PPZqmZJBNSISICN5Rrj5zixP/8K++fgmqo=

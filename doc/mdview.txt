@@ -135,12 +135,10 @@ GitHub のアラートは、引用の 1 行目が [!NOTE]・[!TIP]・[!IMPORTANT
 ==============================================================================
 3. 導入						*mdview-install*
 
-mdview・dal・dam を同じディレクトリに clone します（mdview/go/go.mod の
-replace が ../../dal と ../../dam を使うため）。 >
+mdview と goda.vim を clone します。mermaid と数式を描く dal と dam は、
+ビルドのときに Go が取ってきます。 >
 
 	git clone https://github.com/lea-151107/mdview
-	git clone https://github.com/lea-151107/dal
-	git clone https://github.com/lea-151107/dam
 	git clone https://github.com/Shougo/goda.vim
 <
 goda.vim と mdview を 'runtimepath' に入れます。 >
