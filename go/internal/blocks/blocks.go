@@ -32,6 +32,7 @@ const (
 	Table      Kind = "table"       // a GFM table, laid out by Vim from Block.Table
 	Quote      Kind = "quote"       // a blockquote, its '>' drawn as bars by Vim
 	Code       Kind = "code"        // a fenced code block, framed by Vim
+	Rule       Kind = "rule"        // a thematic break, drawn as a line by Vim
 )
 
 // Block is one part of the document. Start and End are 1-based line
@@ -54,6 +55,9 @@ const (
 // 0-based byte column where each line's text starts after its quote or
 // list marks (the fence, the code), or -1. A mermaid or math fence is both
 // its Mermaid or Math block and a Code block, shown when it is not drawn.
+//
+// For Rule, Start == End is the line, and Col the 0-based byte column of
+// its first mark (after its quote or list marks).
 //
 // For InlineMath, Start == End is the line, and Col and ColEnd are the
 // 0-based byte range of the $…$ in that line.
@@ -171,6 +175,11 @@ func Parse(lines []string) []Block {
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
 			out = append(out, d.htmlImages(n.Segments, false, text.Segment{}, n)...)
+		case *ast.ThematicBreak:
+			if pos := n.Pos(); pos >= 0 && pos < len(d.src) && strings.IndexByte("-*_", d.src[pos]) >= 0 {
+				l := d.line(pos)
+				out = append(out, Block{Kind: Rule, Start: l, End: l, Col: d.col(pos)})
+			}
 		case *ast.Blockquote:
 			if blk, ok := d.quote(n, marks[n]); ok {
 				out = append(out, blk)

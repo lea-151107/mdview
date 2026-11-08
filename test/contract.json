@@ -18,7 +18,8 @@
     "\u003e - \u003e t",
     "```go",
     "\tx := 1",
-    "```"
+    "```",
+    "\u003e ---"
   ],
   "results": [
     {
@@ -225,6 +226,23 @@
         0
       ],
       "closed": true
+    },
+    {
+      "kind": "quote",
+      "start": 20,
+      "end": 20,
+      "col": 0,
+      "col_end": 0,
+      "marks": [
+        0
+      ]
+    },
+    {
+      "kind": "rule",
+      "start": 20,
+      "end": 20,
+      "col": 2,
+      "col_end": 0
     }
   ]
 }

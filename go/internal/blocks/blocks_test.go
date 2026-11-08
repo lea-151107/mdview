@@ -207,6 +207,11 @@ func FuzzParseRanges(f *testing.F) {
 					}
 				}
 			}
+			if b.Kind == Rule {
+				if l := lines[b.Start-1]; b.Col >= len(l) || !strings.ContainsRune("-*_", rune(l[b.Col])) {
+					t.Fatalf("bad rule %+v in %q", b, l)
+				}
+			}
 			if b.Kind == Code {
 				if len(b.Cols) != b.End-b.Start+1 {
 					t.Fatalf("bad code cols %+v", b)
@@ -432,5 +437,34 @@ func TestCode(t *testing.T) {
 	}
 	if len(ofKind(Parse([]string{"```mermaid", "graph TD", "```"}), Mermaid)) != 1 {
 		t.Fatal("mermaid block missing")
+	}
+}
+
+func TestRule(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		want [][2]int // [line, col]
+	}{
+		{"marks", "a\n\n---\n\n***\n\n___\n\n- - -", [][2]int{{3, 0}, {5, 0}, {7, 0}, {9, 0}}},
+		{"indented", "   ---", [][2]int{{1, 3}}},
+		{"in a quote", "> a\n>\n> ---", [][2]int{{3, 2}}},
+		{"in a list", "- foo\n\n  ***", [][2]int{{3, 2}}},
+		{"setext heading", "Title\n---", nil},
+		{"in code", "```\n---\n```", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got [][2]int
+			for _, b := range ofKind(Parse(strings.Split(c.doc, "\n")), Rule) {
+				if b.Start != b.End {
+					t.Fatalf("rule on lines %d..%d", b.Start, b.End)
+				}
+				got = append(got, [2]int{b.Start, b.Col})
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+		})
 	}
 }

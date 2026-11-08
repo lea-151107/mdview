@@ -28,6 +28,7 @@ mdview は、Markdown を読むためのビューアを Vim の中に開きま�
   - 表: 罫線で囲み、列を揃えたテキストにします（|mdview-tables|）
   - コードブロック: 枠で囲み、言語名を出し、言語の構文の色を付けます
     （|mdview-code|）
+  - 水平線（---・***・___）: ビューアの幅の線にします
   - 引用: > を縦線にします。GitHub のアラート（> [!NOTE] など）は種類ごとの
     色と見出しで表します（|mdview-quotes|）
 
@@ -318,6 +319,7 @@ MdviewImage	表のセルの画像の代替テキスト（既定: Special）
 MdviewCodeBorder	コードブロックの枠（既定: Comment）
 MdviewCodeLang	コードブロックの言語名（既定: Title）
 MdviewCodeBlock	構文ファイルの無い言語のコード（既定: markdownCode）
+MdviewRule	水平線（既定: Comment）
 MdviewQuote	ふつうの引用の本文（既定: Comment）
 MdviewQuoteBar	ふつうの引用の縦線（既定: Comment）
 MdviewAlertNote		アラートの縦線と見出し（既定: 青）

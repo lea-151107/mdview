@@ -32,7 +32,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 5
+const scriptVersion = 6
 
 const blockTimeout = 15 * time.Second
 
@@ -333,6 +333,8 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 		switch b.Kind {
 		case blocks.Heading:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+		case blocks.Rule:
+			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Col: b.Col}
 		case blocks.Code:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End,
 				Lang: b.Lang, Cols: b.Cols, Closed: b.Closed}

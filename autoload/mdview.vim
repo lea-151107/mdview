@@ -14,7 +14,7 @@
 
 let s:root = expand('<sfile>:p:h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 5
+let s:script_version = 6
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -447,8 +447,11 @@ function! s:build_view(src, results, ...) abort
   let inline = {}     " source line -> [[col, col_end, text]]
   let quotes = {}     " source line -> [[col of '>' or -1, alert, title line]], outer first
   let codes = {}      " source line -> its code block's result
+  let rules = {}      " source line -> column of a thematic break
   for r in a:results
-    if r.kind ==# 'code'
+    if r.kind ==# 'rule'
+      let rules[r.start] = r.col
+    elseif r.kind ==# 'code'
       for l in range(r.start, r.end)
         let codes[l] = r
       endfor
@@ -496,7 +499,7 @@ function! s:build_view(src, results, ...) abort
 
   " code: the syntax regions of code blocks, [[first, last, syntax, start]].
   let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: [], code: []}
-  let cx = #{headings: headings, inline: inline, quotes: quotes, codes: codes,
+  let cx = #{headings: headings, inline: inline, quotes: quotes, codes: codes, rules: rules,
         \ cols: opts.cols, ts: getbufvar(a:src, '&tabstop', 8)}
   let i = 1
   for g in groups
@@ -627,7 +630,10 @@ function! s:init_code() abort
   highlight default link MdviewCodeLang Title
   highlight default link MdviewCodeBlock markdownCode
   highlight default link mdviewCodePlain MdviewCodeBlock
+  " (Thematic breaks too: a line like the frames'.)
+  highlight default link MdviewRule Comment
   for [name, opts] in [['mdview_code_border', #{highlight: 'MdviewCodeBorder', priority: 10}],
+        \ ['mdview_rule', #{highlight: 'MdviewRule', priority: 10}],
         \ ['mdview_code_lang', #{highlight: 'MdviewCodeLang', priority: 20}]]
     if empty(prop_type_get(name))
       call prop_type_add(name, opts)
@@ -1205,6 +1211,18 @@ endfunction
 function! s:copy_line(v, src_lines, l, cx) abort
   let src = a:src_lines[a:l - 1]
   if has_key(a:cx.codes, a:l) && s:code_line(a:v, a:src_lines, a:l, a:cx)
+    return
+  endif
+  if has_key(a:cx.rules, a:l)
+    " A thematic break: a line across the viewer, after its quote or list
+    " marks.
+    let col = a:cx.rules[a:l]
+    let [t, props, qend] = s:quote_prefix(src, get(a:cx.quotes, a:l, []), 0)
+    let t .= strpart(src, qend, col - qend)
+    let line = repeat(s:code_chars().h, max([3, a:cx.cols - strdisplaywidth(t)]))
+    call add(props, [len(t) + 1, 'mdview_rule', len(line)])
+    call add(a:v.map, len(a:v.lines) + 1)
+    call s:add_line(a:v, t . line, a:l, props)
     return
   endif
   let [t, props, pos] = s:quote_prefix(src, get(a:cx.quotes, a:l, []), 0)

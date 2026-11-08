@@ -262,6 +262,7 @@ func TestContract(t *testing.T) {
 		"```mermaid", "graph TD", "  A -->", "```",
 		"> [!TIP]", "> - > t",
 		"```go", "\tx := 1", "```",
+		"> ---",
 	}
 	req := request{Lines: lines, Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16},
 		WidthPx: 640, HeightPx: 480, InlineMath: 1}

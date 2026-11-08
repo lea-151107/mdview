@@ -17,10 +17,11 @@ function! Test_contract() abort
         \ 'mdview: error',
         \ '│ 💡 Tip', '│ - │ t',
         \ '╭─ go ' . repeat('─', 74), '        x := 1', '╰' . repeat('─', 79),
+        \ '│ ' . repeat('─', 78),
         \ ], v.lines)
   call assert_equal(['mdview_alert_tip', 'mdview_bold', 'mdview_code_border',
         \ 'mdview_code_lang', 'mdview_error', 'mdview_heading',
-        \ 'mdview_math', 'mdview_quote', 'mdview_quote_bar',
+        \ 'mdview_math', 'mdview_quote', 'mdview_quote_bar', 'mdview_rule',
         \ 'mdview_table', 'mdview_table_border', 'mdview_table_header'],
         \ uniq(sort(map(copy(v.props), 'v:val[1]'))))
   " mermaid, the image in text, the one in a table cell (inside its

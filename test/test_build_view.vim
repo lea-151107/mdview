@@ -376,3 +376,23 @@ function! Test_code_syntax() abort
     syntax off
   endtry
 endfunction
+
+" Thematic breaks: a line across the viewer, after the quote's bar.
+function! Test_build_view_rule() abort
+  let src = Src(['a', '---', '> ***', '- x', '', '  ___'])
+  let results = [#{kind: 'rule', start: 2, end: 2, col: 0},
+        \ #{kind: 'quote', start: 3, end: 3, marks: [0]}, #{kind: 'rule', start: 3, end: 3, col: 2},
+        \ #{kind: 'rule', start: 6, end: 6, col: 2}]
+  let v = S('build_view')(src, results, #{cellw: 8, cols: 10})
+  call assert_equal(['a', repeat('─', 10), '│ ' . repeat('─', 8), '- x', '', '  ' . repeat('─', 8)], v.lines)
+  call assert_equal(range(1, 6), v.map)
+  call assert_equal([[2, 'mdview_rule', 30, 1], [3, 'mdview_quote_bar', 3, 1],
+        \ [3, 'mdview_rule', 24, 5], [6, 'mdview_rule', 24, 3]], v.props)
+  set ambiwidth=double
+  try
+    let v = S('build_view')(src, results[:0], #{cellw: 8, cols: 10})
+  finally
+    set ambiwidth=single
+  endtry
+  call assert_equal(repeat('-', 10), v.lines[1])
+endfunction
