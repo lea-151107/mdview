@@ -1627,6 +1627,22 @@ function! s:update_modes(win) abort
 endfunction
 
 function! s:on_scrolled() abort
+  " A source scrolled without its cursor moving (zt, <C-e>, the mouse wheel,
+  " also over a window that is not the current one): CursorMoved does not
+  " come, so follow it from here, in its window. (Scrolling a viewer goes
+  " the other way, in s:follow_back() with g:mdview_sync_back; the source it
+  " scrolls must not move the viewer back, so then not while a viewer of it
+  " is the current window.)
+  for id in keys(v:event)
+    let src = winbufnr(str2nr(id))
+    if id ==# 'all' || src <= 0 || empty(s:state(src))
+      continue
+    endif
+    if get(g:, 'mdview_sync_back', 0) && bufnr('%') == s:state(src).viewer
+      continue
+    endif
+    call win_execute(str2nr(id), 'call s:follow(' . src . ')')
+  endfor
   for [win, p] in items(s:popups)
     call s:update_modes(str2nr(win))
     let top = get(getwininfo(str2nr(win)), 0, #{topline: p.top}).topline
