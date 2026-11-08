@@ -1,6 +1,7 @@
 package blocks
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -214,7 +215,8 @@ func TestReviewCases(t *testing.T) {
 		want []Block
 	}{
 		{"image in a table cell keeps the row", "| a | b |\n|---|---|\n| ![x](x.png) | y |",
-			[]Block{{Kind: Image, Start: 3, End: 3, Path: "x.png", Alt: "x", Keep: true, Indent: 2}}},
+			[]Block{{Kind: Image, Start: 3, End: 3, Path: "x.png", Alt: "x", Keep: true, Indent: 2,
+				Cell: &CellPos{Row: 1, Col: 0, Cols: 2}}}},
 		{"\\[ does not interrupt a paragraph", "Intro text\n\\[1] ref ![a](a.png)\nmore",
 			[]Block{{Kind: Image, Start: 2, End: 2, Path: "a.png", Alt: "a", Keep: true}}},
 		{"unclosed $$ does not swallow lines", "$$\nnot closed ![a](a.png)\n\nnext",
@@ -278,7 +280,8 @@ func TestTable(t *testing.T) {
 	}
 	// The image in a cell is drawn below its row; the formula is part of
 	// the cell, not inline math of the line.
-	if imgs := ofKind(bs, Image); len(imgs) != 1 || imgs[0].Start != 6 || !imgs[0].Keep {
+	if imgs := ofKind(bs, Image); len(imgs) != 1 || imgs[0].Start != 6 || !imgs[0].Keep ||
+		*imgs[0].Cell != (CellPos{Row: 2, Col: 2, Cols: 3}) {
 		t.Fatalf("images: %#v", imgs)
 	}
 	if m := ofKind(bs, InlineMath); len(m) != 0 {
@@ -300,5 +303,36 @@ func TestTableNested(t *testing.T) {
 		if len(tb) != 1 || tb[0].Start != c.start || tb[0].End != c.end || tb[0].Indent != c.indent {
 			t.Errorf("%q: %#v", c.doc, tb)
 		}
+	}
+}
+
+func TestTableCellImages(t *testing.T) {
+	doc := strings.Split("| a | b |\n|---|---|\n| x | ![1](1.png) t ![2](2.png) |\n"+
+		"| <img src=\"3.png\" alt=\"three\"> <img alt=nosrc> | [![4](4.png)](u) |", "\n")
+	var got []string
+	for _, b := range ofKind(Parse(doc), Image) {
+		if b.Cell == nil {
+			t.Fatalf("no cell: %#v", b)
+		}
+		got = append(got, fmt.Sprintf("%s@%d:%d,%d#%d/%d", b.Path, b.Start, b.Cell.Row, b.Cell.Col, b.Cell.Nth, b.Cell.Cols))
+	}
+	want := []string{"1.png@3:1,1#0/2", "2.png@3:1,1#1/2", "3.png@4:2,0#0/2", "4.png@4:2,1#0/2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	// One image span per image block, in the same order.
+	tb := ofKind(Parse(doc), Table)[0].Table
+	var spans []string
+	for _, row := range tb.Rows {
+		for _, cell := range row {
+			for _, sp := range cell {
+				if strings.Contains(sp.Style, "image") {
+					spans = append(spans, sp.Text)
+				}
+			}
+		}
+	}
+	if !reflect.DeepEqual(spans, []string{"[1]", "[2]", "[three]", "[4]"}) {
+		t.Fatalf("image spans %v", spans)
 	}
 }

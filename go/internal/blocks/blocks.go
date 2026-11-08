@@ -58,6 +58,14 @@ type Block struct {
 	ColEnd int        // InlineMath: byte offset after the closing $
 	Width  int        // Image: width in pixels from <img width="…">, 0 if none
 	Table  *TableData // Table: its cells
+	Cell   *CellPos   // Image: the table cell it is in, or nil
+}
+
+// CellPos is where an image in a table is: the row (0 is the header) and
+// column of its cell, which image of the cell it is (Nth, from 0), and how
+// many columns the table has.
+type CellPos struct {
+	Row, Col, Nth, Cols int
 }
 
 var (
@@ -136,10 +144,10 @@ func Parse(lines []string) []Block {
 			out = append(out, d.image(n))
 			return ast.WalkSkipChildren, nil
 		case *ast.HTMLBlock:
-			out = append(out, d.htmlImages(n.Lines(), n.HasClosure(), n.ClosureLine, false)...)
+			out = append(out, d.htmlImages(n.Lines(), n.HasClosure(), n.ClosureLine, nil)...)
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
-			out = append(out, d.htmlImages(n.Segments, false, text.Segment{}, true)...)
+			out = append(out, d.htmlImages(n.Segments, false, text.Segment{}, n)...)
 		case *extast.Table:
 			if blk, ok := d.table(n); ok {
 				out = append(out, blk)
@@ -155,6 +163,15 @@ func Parse(lines []string) []Block {
 		return ast.WalkContinue, nil
 	})
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	// Number the images of each cell in order.
+	nth := map[[3]int]int{}
+	for i := range out {
+		if c := out[i].Cell; c != nil {
+			k := [3]int{out[i].Start, c.Row, c.Col}
+			c.Nth = nth[k]
+			nth[k]++
+		}
+	}
 	return out
 }
 
@@ -209,7 +226,8 @@ func (d *doc) image(n *ast.Image) Block {
 	l := d.line(off)
 	blk := Block{Kind: Image, Start: l, End: l, Path: string(n.Destination),
 		Alt: string(altText(n, d.src)), Keep: true}
-	if rest := d.withoutImages(n, l); strings.TrimSpace(rest) == "" && !inTableCell(n) {
+	blk.Cell = cellPos(n)
+	if rest := d.withoutImages(n, l); strings.TrimSpace(rest) == "" && blk.Cell == nil {
 		blk.Keep = false
 	}
 	// Indent: where the paragraph's text starts (after quote or list marks).
@@ -222,22 +240,40 @@ func (d *doc) image(n *ast.Image) Block {
 	return blk
 }
 
-// inTableCell reports whether n is in a table: a cell is a part of its row's
-// line, so the line is never replaced by the image.
-func inTableCell(n ast.Node) bool {
+// cellPos returns the table cell n is in, or nil. (A cell is a part of its
+// row's line, so the line is never replaced by an image in it.)
+func cellPos(n ast.Node) *CellPos {
 	for p := n.Parent(); p != nil; p = p.Parent() {
-		if p.Kind() == extast.KindTableCell {
-			return true
+		if p.Kind() != extast.KindTableCell {
+			continue
 		}
+		c := &CellPos{}
+		for s := p.PreviousSibling(); s != nil; s = s.PreviousSibling() {
+			c.Col++
+		}
+		row := p.Parent()
+		if row == nil || row.Parent() == nil {
+			return c
+		}
+		for s := row.PreviousSibling(); s != nil; s = s.PreviousSibling() {
+			c.Row++
+		}
+		if t, ok := row.Parent().(*extast.Table); ok {
+			c.Cols = len(t.Alignments)
+		}
+		return c
 	}
-	return false
+	return nil
 }
+
+// inTableCell reports whether n is in a table cell.
+func inTableCell(n ast.Node) bool { return cellPos(n) != nil }
 
 // htmlImages returns the <img> tags in HTML (a block, or a tag inside a
 // paragraph when inline). An image whose line holds nothing but tags replaces
 // the line; one with text around it, or inline, keeps it. HTML comments are
-// skipped.
-func (d *doc) htmlImages(segs *text.Segments, closed bool, closure text.Segment, inline bool) []Block {
+// skipped. inline is the RawHTML node of a tag inside a paragraph, else nil.
+func (d *doc) htmlImages(segs *text.Segments, closed bool, closure text.Segment, inline ast.Node) []Block {
 	var out []Block
 	all := []text.Segment{}
 	for i := 0; i < segs.Len(); i++ {
@@ -261,12 +297,18 @@ func (d *doc) htmlImages(segs *text.Segments, closed bool, closure text.Segment,
 			// The line is replaced only when it holds nothing but tags (after
 			// the quote or list marks); otherwise the image goes below it.
 			text := line[min(d.col(seg.Start), len(line)):]
-			if inline {
+			if inline != nil {
 				text = strings.TrimLeft(line, " \t>")
 			}
 			blk := Block{Kind: Image, Start: l, End: l, Path: src, Alt: firstGroup(imgAlt.FindSubmatch(tag)),
 				Keep:   strings.TrimSpace(anyTag.ReplaceAllString(text, "")) != "" || inTableRow(line),
 				Indent: d.col(seg.Start)}
+			if inline != nil {
+				blk.Cell = cellPos(inline)
+				if blk.Cell != nil {
+					blk.Keep = true
+				}
+			}
 			if m := imgWidth.FindSubmatch(tag); m != nil {
 				blk.Width, _ = strconv.Atoi(string(m[1]))
 			}

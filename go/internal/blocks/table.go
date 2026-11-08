@@ -168,7 +168,11 @@ func (d *doc) spans(cell ast.Node) []Span {
 						"u": "u", "ins": "u"}[name]
 					switch {
 					case name == "img":
-						add("["+firstGroup(imgAlt.FindSubmatch([]byte(tag)))+"]", with(st, "image"))
+						// Only those Parse returns, so that the nth image span
+						// of a cell is its nth image block.
+						if firstGroup(imgSrc.FindSubmatch([]byte(tag))) != "" {
+							add("["+firstGroup(imgAlt.FindSubmatch([]byte(tag)))+"]", with(st, "image"))
+						}
 					case name == "br":
 						add("\n", nil)
 					case s != "" && m[1] == "/":

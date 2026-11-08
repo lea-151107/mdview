@@ -36,6 +36,10 @@ const scriptVersion = 3
 
 const blockTimeout = 15 * time.Second
 
+// defaultTableImageRows is the height of an image in a table cell when the
+// request does not say.
+const defaultTableImageRows = 8
+
 // flushInterval is how often finished blocks are sent while others are
 // still being drawn.
 const flushInterval = 200 * time.Millisecond
@@ -103,7 +107,9 @@ type request struct {
 	FontBoldIdx  int      `json:"font_bold_index"`
 	InlineMath   int      `json:"inline_math"`
 	Remote       int      `json:"remote"`
-	Callback     string   `json:"callback"`
+	// TableImageRows caps the height of an image in a table cell, in rows.
+	TableImageRows int    `json:"table_image_rows"`
+	Callback       string `json:"callback"`
 }
 
 // result is one block as returned to Vim.
@@ -128,6 +134,9 @@ type result struct {
 	// replaces it).
 	Col    int `json:"col"`
 	ColEnd int `json:"col_end"`
+	// Cell: [row, column, nth] of an image in a table cell (see
+	// blocks.CellPos); Vim puts it in the cell.
+	Cell []int `json:"cell,omitempty"`
 	// Table: the cells of a table, laid out by Vim.
 	Table *tableResult `json:"table,omitempty"`
 }
@@ -324,7 +333,7 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 				}
 			}
 		case blocks.Mermaid, blocks.Math, blocks.Image:
-			r, done := p.prepare(req, blockStyle(st, b), b)
+			r, done := p.prepare(req, blockStyle(st, b, req.TableImageRows), b)
 			if !done {
 				r.Pending = true
 				todo = append(todo, i)
@@ -355,7 +364,7 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 				return
 			}
 			defer func() { <-sem }()
-			ch <- done{i, p.drawShared(ctx, req, blockStyle(st, b), b)}
+			ch <- done{i, p.drawShared(ctx, req, blockStyle(st, b, req.TableImageRows), b)}
 		}()
 	}
 	tick := time.NewTicker(flushInterval)
@@ -382,12 +391,31 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 }
 
 func base(b blocks.Block) result {
-	return result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep, Indent: b.Indent}
+	r := result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep, Indent: b.Indent}
+	if c := b.Cell; c != nil {
+		r.Cell = []int{c.Row, c.Col, c.Nth}
+	}
+	return r
 }
 
 // blockStyle narrows the width for an indented block, and for an image
 // with a width attribute (<img width="…">).
-func blockStyle(st render.Style, b blocks.Block) render.Style {
+func blockStyle(st render.Style, b blocks.Block, tableRows int) render.Style {
+	if c := b.Cell; c != nil {
+		// An image in a table cell: at most an equal share of the width
+		// (less the table's borders and padding), and tableRows rows high.
+		if st.MaxW > 0 && c.Cols > 0 {
+			st.MaxW = max(st.CellW, (st.MaxW-(c.Cols*3+1)*st.CellW)/c.Cols)
+		}
+		if tableRows <= 0 {
+			tableRows = defaultTableImageRows
+		}
+		st.MaxH = tableRows * st.CellH
+		if b.Width > 0 && b.Width < st.MaxW {
+			st.MaxW = b.Width
+		}
+		return st
+	}
 	if b.Indent > 0 && st.MaxW > 0 {
 		st.MaxW = max(st.CellW, st.MaxW-b.Indent*st.CellW)
 	}

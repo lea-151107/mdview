@@ -297,6 +297,7 @@ function! mdview#refresh(...) abort
         \ font_bold_index: get(g:, 'mdview_font_bold_index', 0),
         \ inline_math: get(g:, 'mdview_inline_math', 1) ? 1 : 0,
         \ remote: get(g:, 'mdview_remote', 0) ? 1 : 0,
+        \ table_image_rows: get(g:, 'mdview_table_image_rows', 8),
         \ }
   let state.width = info.width
   let state.height = info.height
@@ -451,15 +452,17 @@ function! s:build_view(src, results, ...) abort
         call add(groups, #{start: r.start, end: r.end, keep: 0, items: [], table: r})
       endif
     else
-      if get(r, 'pending', 0) && has_key(opts.prev, r.kind . ':' . r.start)
+      if get(r, 'pending', 0) && has_key(opts.prev, s:prev_key(r))
         " Still drawing: keep showing the image it had.
-        let r = extend(copy(opts.prev[r.kind . ':' . r.start]),
+        let r = extend(copy(opts.prev[s:prev_key(r)]),
               \ #{start: r.start, end: r.end, keep: get(r, 'keep', 0), indent: get(r, 'indent', 0)})
       endif
       if !empty(groups) && has_key(groups[-1], 'table')
             \ && r.start >= groups[-1].start && r.start <= groups[-1].end
-        " An image in a cell: drawn below the table.
-        call add(groups[-1].items, extend(copy(r), #{indent: get(groups[-1].table, 'indent', 0)}))
+        " An image in a cell: drawn in the cell (or, without one, below the
+        " table).
+        call add(groups[-1].items, has_key(r, 'cell') ? r
+              \ : extend(copy(r), #{indent: get(groups[-1].table, 'indent', 0)}))
       elseif !empty(groups) && groups[-1].start == r.start && groups[-1].end == r.end
             \ && groups[-1].keep == get(r, 'keep', 0)
         call add(groups[-1].items, r)
@@ -479,7 +482,14 @@ function! s:build_view(src, results, ...) abort
     let failed = filter(copy(g.items), {_, r -> empty(get(r, 'path', '')) && empty(get(r, 'text', []))})
     let first_line = src_lines[g.start - 1]
     if has_key(g, 'table')
-      call s:add_table(v, g.table, first_line, opts)
+      let cell_images = {}
+      for r in g.items
+        if has_key(r, 'cell') && !empty(get(r, 'path', ''))
+          let c = r.cell[0] . ':' . r.cell[1]
+          let cell_images[c] = extend(get(cell_images, c, {}), {r.cell[2]: r})
+        endif
+      endfor
+      call s:add_table(v, g.table, first_line, opts, cell_images)
     elseif g.keep || !empty(failed)
       for k in range(g.start, g.end)
         call s:copy_line(v, src_lines, k, headings, inline)
@@ -490,10 +500,11 @@ function! s:build_view(src, results, ...) abort
     " Image rows keep the quote marks of the block ("> > "), so the quote's
     " bar goes on beside the image.
     let quote = substitute(matchstr(first_line, '^\s*\%(>\s\?\)\+'), '\s\+$', '', '')
-    let images = filter(copy(g.items), {_, r -> !empty(get(r, 'path', ''))})
+    let images = filter(copy(g.items), {_, r -> !empty(get(r, 'path', '')) && !has_key(r, 'cell')})
     call s:add_images(v, images, has_key(g, 'table') ? g.end : g.start, quote, opts, first_line)
     for r in g.items
-      if !empty(get(r, 'path', ''))
+      " (An image of a cell being drawn shows its [alt] meanwhile.)
+      if !empty(get(r, 'path', '')) || (has_key(r, 'cell') && get(r, 'pending', 0))
         continue
       endif
       let indent = repeat(' ', s:display_indent(first_line, get(r, 'indent', 0)))
@@ -566,18 +577,46 @@ endfunction
 
 " A cell's runs [[text, style], ...] as lines of characters [[char, style,
 " width], ...], split at line breaks.
-function! s:cell_lines(runs) abort
+function! s:cell_lines(runs, ...) abort
+  " a:1: nth image of the cell -> its drawn image result; a:2: cell width.
+  let images = a:0 ? a:1 : {}
+  let cellw = a:0 > 1 ? a:2 : 8
   let lines = [[]]
+  let nth = 0
   for [text, style] in a:runs
     if text ==# "\n"
       call add(lines, [])
       continue
     endif
+    if index(split(style, ','), 'image') >= 0
+      let nth += 1
+      if has_key(images, nth - 1)
+        " A drawn image: on lines of its own, in place of its [alt].
+        let r = images[nth - 1]
+        call add(lines, #{img: r, w: (r.w + cellw - 1) / cellw, rows: max([1, r.rows])})
+        call add(lines, [])
+        continue
+      endif
+    endif
     for c in split(substitute(text, '[\t\r\n]', ' ', 'g'), '\zs')
       call add(lines[-1], [c, style, strdisplaywidth(c)])
     endfor
   endfor
-  return lines
+  if empty(images)
+    return lines
+  endif
+  " Drop the blank lines around the images (the spaces between them).
+  let out = []
+  for k in range(len(lines))
+    let l = lines[k]
+    if type(l) == v:t_list && empty(s:trim_chars(l))
+          \ && (k == 0 || type(lines[k - 1]) == v:t_dict || k == len(lines) - 1
+          \     || type(lines[k + 1]) == v:t_dict)
+      continue
+    endif
+    call add(out, l)
+  endfor
+  return empty(out) ? [[]] : out
 endfunction
 
 function! s:chars_width(chars) abort
@@ -667,17 +706,25 @@ function! s:wrap_chars(chars, w) abort
 endfunction
 
 " The column widths of a table: as wide as their cells, the widest narrowed
-" one by one while the table is wider than avail (down to 3, or the cell).
+" one by one while the table is wider than avail (down to 3, or the cell,
+" but not below the images in the column).
 function! s:table_widths(cells, ncols, avail) abort
   let widths = repeat([1], a:ncols)
+  let image_w = repeat([0], a:ncols)   " the widest image of each column
   for row in a:cells
     for j in range(min([len(row), a:ncols]))
       for l in row[j]
-        let widths[j] = max([widths[j], s:chars_width(l)])
+        if type(l) == v:t_dict
+          let image_w[j] = max([image_w[j], l.w])
+          let widths[j] = max([widths[j], l.w])
+        else
+          let widths[j] = max([widths[j], s:chars_width(l)])
+        endif
       endfor
     endfor
   endfor
-  let least = map(copy(widths), {_, w -> min([w, 3])})
+  " A column is not narrowed below its images: they cannot be scaled here.
+  let least = map(copy(widths), {j, w -> max([min([w, 3]), image_w[j]])})
   let total = eval(join(widths, '+'))
   while total > a:avail
     let j = -1
@@ -698,7 +745,9 @@ endfunction
 " Add table result r to the viewer: lines boxed with s:table_chars(), its
 " cells wrapped to fit opts.cols, and the source lines of its rows mapped to
 " their first lines (the delimiter row to the line under the header).
-function! s:add_table(v, r, first_line, opts) abort
+function! s:add_table(v, r, first_line, opts, ...) abort
+  " a:1: "row:col" -> {nth: drawn image result} of the images in cells.
+  let images = a:0 ? a:1 : {}
   let t = a:r.table
   let ch = s:table_chars()
   let ncols = max([len(t.align)] + map(copy(t.rows), 'len(v:val)'))
@@ -706,7 +755,8 @@ function! s:add_table(v, r, first_line, opts) abort
   let quote = substitute(matchstr(a:first_line, '^\s*\%(>\s\?\)\+'), '\s\+$', '', '')
   let indent = s:display_indent(a:first_line, get(a:r, 'indent', 0))
   let prefix = quote . repeat(' ', max([0, indent - strdisplaywidth(quote)]))
-  let cells = map(copy(t.rows), {_, row -> map(copy(row), {_, c -> s:cell_lines(c)})})
+  let cells = map(copy(t.rows), {i, row -> map(copy(row),
+        \ {j, c -> s:cell_lines(c, get(images, i . ':' . j, {}), a:opts.cellw)})})
   let widths = s:table_widths(cells, ncols,
         \ a:opts.cols - strdisplaywidth(prefix) - (ncols * 3 + 1))
 
@@ -721,7 +771,14 @@ function! s:add_table(v, r, first_line, opts) abort
     for j in range(ncols)
       let lines = []
       for l in get(cells[i], j, [[]])
-        call extend(lines, s:wrap_chars(l, widths[j]))
+        if type(l) == v:t_dict
+          " An image: as many lines as it is tall.
+          for k in range(l.rows)
+            call add(lines, extend(copy(l), #{k: k}))
+          endfor
+        else
+          call extend(lines, s:wrap_chars(l, widths[j]))
+        endif
       endfor
       call add(wrapped, lines)
     endfor
@@ -729,14 +786,30 @@ function! s:add_table(v, r, first_line, opts) abort
     for k in range(max(map(copy(wrapped), 'len(v:val)')))
       let line = prefix
       let props = []
+      let keys = []
       for j in range(ncols)
         call add(props, [len(line) + 1, 'mdview_table_border', len(ch.v)])
         let line .= ch.v . ' '
         let chars = get(wrapped[j], k, [])
+        let img = {}
+        if type(chars) == v:t_dict
+          let img = chars
+          let chars = map(range(img.w), {-> [' ', '', 1]})
+        endif
         let pad = widths[j] - s:chars_width(chars)
         let left = align[j] ==# 'r' ? pad : align[j] ==# 'c' ? pad / 2 : 0
         let line .= repeat(' ', max([0, left]))
         let cell_start = len(line)
+        if !empty(img)
+          call add(keys, img.img.key . '@' . strdisplaywidth(line) . '#' . img.k)
+          if img.k == 0
+            let s:next_id += 1
+            let first_lnum = len(a:v.lines) + 1
+            call add(a:v.anchors, #{id: s:next_id, key: img.img.key, path: img.img.path,
+                  \ w: img.img.w, h: img.img.h, first: first_lnum,
+                  \ last: first_lnum + img.rows - 1, indent: strdisplaywidth(line)})
+          endif
+        endif
         " Runs of one style, as properties.
         let run = ''
         let run_start = len(line)
@@ -761,6 +834,10 @@ function! s:add_table(v, r, first_line, opts) abort
       let line .= ch.v
       call insert(props, [len(prefix) + 1, 'mdview_table', len(line) - len(prefix)])
       call s:add_line(a:v, line, src_lines[i], props)
+      if !empty(keys)
+        " The images on the line are part of it, for the diff in s:draw().
+        let a:v.sig[-1] .= "\x02" . join(keys, ',')
+      endif
     endfor
     if i == 0
       let first[-1] = len(a:v.lines) + 1   " the delimiter row
@@ -783,6 +860,12 @@ function! s:add_table(v, r, first_line, opts) abort
     endfor
     call add(a:v.map, to)
   endfor
+endfunction
+
+" The key under which an image result is remembered while it is redrawn:
+" by its block, and for one in a table cell by the cell and its place there.
+function! s:prev_key(r) abort
+  return a:r.kind . ':' . a:r.start . (has_key(a:r, 'cell') ? ':' . join(a:r.cell, ':') : '')
 endfunction
 
 " The display column of byte offset col in line (tabs expanded).
@@ -876,7 +959,7 @@ function! s:draw(src, state) abort
   " Remember the images, for blocks that are redrawn later.
   for r in a:state.results
     if !empty(get(r, 'path', ''))
-      let prev[r.kind . ':' . r.start] = r
+      let prev[s:prev_key(r)] = r
     endif
   endfor
   let a:state.prev = prev

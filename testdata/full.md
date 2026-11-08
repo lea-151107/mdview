@@ -65,7 +65,8 @@ Markdown の書式、mermaid、数式、画像をまとめて確認するため�
 | エスケープ | `a \| b` と a \| b | [リンク](https://example.com) |
 | 数式 | $E = mc^2$ と $\alpha + \beta$ | 次の行は列が足りない |
 | 足りない |
-| 画像 | ![グラデーション](gradient.png) | 画像は表の下に出ます |
+| 画像 | ![グラデーション](gradient.png) | 画像はセルの中に描きます |
+| 2 枚と文字 | ![a](gradient.png) と <img src="gradient.png" alt="b" width="48"> | 縦に並びます |
 
 > | 引用の中 | 表 |
 > |---|---|

@@ -10,16 +10,16 @@ function! Test_contract() abort
         \ '# Title',
         \ '', '',
         \ 'text x² and ![a](a.png) here', '', '',
-        \ '┌─────┬──────┐', '│ [a] │ cell │', '├─────┼──────┤', '│ y   │    b │', '└─────┴──────┘',
-        \ '', '',
+        \ '┌────┬──────┐', '│    │ cell │', '│    │      │', '├────┼──────┤', '│ y  │    b │',
+        \ '└────┴──────┘',
         \ '>', '>',
         \ '```mermaid', 'graph TD', '  A -->', '```', 'mdview: error',
         \ ], v.lines)
-  call assert_equal(['mdview_bold', 'mdview_error', 'mdview_heading', 'mdview_image',
+  call assert_equal(['mdview_bold', 'mdview_error', 'mdview_heading',
         \ 'mdview_math', 'mdview_table', 'mdview_table_border', 'mdview_table_header'],
         \ uniq(sort(map(copy(v.props), 'v:val[1]'))))
-  " mermaid, the image in text, the one in a table (below it), the one in a
-  " quote.
-  call assert_equal([[2, 3, 0], [5, 6, 0], [12, 13, 0], [14, 15, 2]],
+  " mermaid, the image in text, the one in a table cell (inside its
+  " borders), the one in a quote.
+  call assert_equal([[2, 3, 0], [5, 6, 0], [8, 9, 2], [13, 14, 2]],
         \ map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
 endfunction

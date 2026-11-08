@@ -156,6 +156,7 @@ function! Test_build_view_table_line_break_and_quote() abort
 endfunction
 
 function! Test_build_view_table_image_below() abort
+  " An image without a cell (not from the Go side today) goes below.
   let src = Src(['| ![a](a.png) |', '|---|', 'z'])
   let r = s:table(1, 2, [''], [1], [[[['[a]', 'image']]]])
   let img = #{kind: 'image', start: 1, end: 1, keep: 1, key: 'k', path: '/p', w: 8, h: 32, rows: 2, indent: 2}
@@ -163,4 +164,60 @@ function! Test_build_view_table_image_below() abort
   call assert_equal(['┌─────┐', '│ [a] │', '├─────┤', '└─────┘', '', '', 'z'], v.lines)
   call assert_equal([[5, 6, 0]], map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
   call assert_equal([2, 3, 7], v.map)
+endfunction
+
+function! Test_build_view_table_image_in_cell() abort
+  let src = Src(['> | a | b |', '> |--:|---|', '> | x | ![p](p.png) t ![q](q.png) |', 'z'])
+  let r = s:table(1, 3, ['r', ''], [1, 3], [
+        \ [[['a', '']], [['b', '']]],
+        \ [[['x', '']], [['[p]', 'image'], [' t ', ''], ['[q]', 'image']]]], 2)
+  " p is 5 cells wide and 2 rows; q 3 cells and 1 row.
+  let p = #{kind: 'image', start: 3, end: 3, keep: 1, key: 'kp', path: '/p', w: 40, h: 32, rows: 2, cell: [1, 1, 0]}
+  let q = #{kind: 'image', start: 3, end: 3, keep: 1, key: 'kq', path: '/q', w: 24, h: 16, rows: 1, cell: [1, 1, 1]}
+  let v = S('build_view')(src, [r, p, q], #{cellw: 8, cols: 80})
+  call assert_equal([
+        \ '> ┌───┬───────┐',
+        \ '> │ a │ b     │',
+        \ '> ├───┼───────┤',
+        \ '> │ x │       │',
+        \ '> │   │       │',
+        \ '> │   │ t     │',
+        \ '> │   │       │',
+        \ '> └───┴───────┘',
+        \ 'z'], v.lines)
+  " The images stack in the cell: the anchors are at its column.
+  call assert_equal([[4, 5, 8, 'kp'], [7, 7, 8, 'kq']],
+        \ map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent, a.key]}))
+  call assert_equal([2, 3, 4, 9], v.map)
+  " An image that changes changes its lines.
+  let q2 = extend(copy(q), #{key: 'kq2'})
+  let v2 = S('build_view')(src, [r, p, q2], #{cellw: 8, cols: 80})
+  call assert_equal(v.sig[:5], v2.sig[:5])
+  call assert_notequal(v.sig[6], v2.sig[6])
+endfunction
+
+function! Test_build_view_table_image_in_cell_narrow() abort
+  " The column of an image is not narrowed below it.
+  let src = Src(['| a | b |', '|---|---|', '| long long text | ![p](p.png) |'])
+  let r = s:table(1, 3, ['', ''], [1, 3], [
+        \ [[['a', '']], [['b', '']]],
+        \ [[['long long text', '']], [['[p]', 'image']]]])
+  let p = #{kind: 'image', start: 3, end: 3, keep: 1, key: 'kp', path: '/p', w: 80, h: 16, rows: 1, cell: [1, 1, 0]}
+  let v = S('build_view')(src, [r, p], #{cellw: 8, cols: 20})
+  call assert_equal('┌─────┬────────────┐', v.lines[0])
+  call assert_equal([[4, 4, 8]], map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
+endfunction
+
+function! Test_build_view_table_image_pending_shows_alt() abort
+  let src = Src(['| ![p](p.png) |', '|---|'])
+  let r = s:table(1, 2, [''], [1], [[[['[p]', 'image']]]])
+  let p = #{kind: 'image', start: 1, end: 1, keep: 1, pending: 1, cell: [0, 0, 0]}
+  let v = S('build_view')(src, [r, p])
+  call assert_equal(['┌─────┐', '│ [p] │', '├─────┤', '└─────┘'], v.lines)
+  call assert_equal([], v.anchors)
+  " With an image from before, that one shows meanwhile.
+  let old = #{kind: 'image', start: 1, end: 1, keep: 1, key: 'old', path: '/o', w: 8, h: 16, rows: 1, cell: [0, 0, 0]}
+  let v = S('build_view')(src, [r, p], #{prev: {'image:1:0:0:0': old}})
+  call assert_equal(['┌───┐', '│   │', '├───┤', '└───┘'], v.lines)
+  call assert_equal(['old'], map(copy(v.anchors), 'v:val.key'))
 endfunction

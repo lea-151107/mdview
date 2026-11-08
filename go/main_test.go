@@ -194,7 +194,7 @@ func TestFailureRemembered(t *testing.T) {
 }
 
 func TestImgWidthNarrows(t *testing.T) {
-	st := blockStyle(render.Style{CellW: 8, MaxW: 640}, blocks.Block{Kind: blocks.Image, Width: 200, Indent: 2})
+	st := blockStyle(render.Style{CellW: 8, MaxW: 640}, blocks.Block{Kind: blocks.Image, Width: 200, Indent: 2}, 0)
 	if st.MaxW != 200 {
 		t.Fatalf("MaxW %d", st.MaxW)
 	}
@@ -248,5 +248,17 @@ func TestContract(t *testing.T) {
 	}
 	if string(bytes.TrimSpace(want)) != string(got) {
 		t.Fatalf("contract changed; check test/test_contract.vim and run with MDVIEW_UPDATE=1\n%s", got)
+	}
+}
+
+func TestBlockStyleTableCell(t *testing.T) {
+	st := render.Style{CellW: 8, CellH: 16, MaxW: 800, MaxH: 600}
+	got := blockStyle(st, blocks.Block{Kind: blocks.Image, Cell: &blocks.CellPos{Cols: 3}}, 5)
+	// (800 - 10 cells of borders) / 3 columns; 5 rows.
+	if got.MaxW != (800-10*8)/3 || got.MaxH != 5*16 {
+		t.Fatalf("got %d×%d", got.MaxW, got.MaxH)
+	}
+	if got := blockStyle(st, blocks.Block{Kind: blocks.Image, Cell: &blocks.CellPos{Cols: 1}}, 0); got.MaxH != defaultTableImageRows*16 {
+		t.Fatalf("default rows: %d", got.MaxH)
 	}
 }
