@@ -6,12 +6,15 @@ package blocks
 
 import (
 	"bytes"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
+	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
 )
@@ -48,7 +51,16 @@ type Block struct {
 	Indent int    // columns the block is indented by (quotes, lists)
 	Col    int    // InlineMath: byte offset of $ in the line
 	ColEnd int    // InlineMath: byte offset after the closing $
+	Width  int    // Image: width in pixels from <img width="…">, 0 if none
 }
+
+var (
+	imgTag   = regexp.MustCompile(`(?i)<img\b[^>]*>`)
+	imgSrc   = regexp.MustCompile(`(?i)\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
+	imgAlt   = regexp.MustCompile(`(?i)\balt\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
+	imgWidth = regexp.MustCompile(`(?i)\bwidth\s*=\s*["']?(\d+)(?:px)?["']?(?:[\s>/]|$)`)
+	anyTag   = regexp.MustCompile(`<[^>]*>`)
+)
 
 var md = goldmark.New(
 	goldmark.WithExtensions(extension.GFM, mathExtension{}),
@@ -117,6 +129,11 @@ func Parse(lines []string) []Block {
 		case *ast.Image:
 			out = append(out, d.image(n))
 			return ast.WalkSkipChildren, nil
+		case *ast.HTMLBlock:
+			out = append(out, d.htmlImages(n.Lines(), n.HasClosure(), n.ClosureLine, false)...)
+			return ast.WalkSkipChildren, nil
+		case *ast.RawHTML:
+			out = append(out, d.htmlImages(n.Segments, false, text.Segment{}, true)...)
 		case *MathInline:
 			l := d.line(n.Start)
 			out = append(out, Block{Kind: InlineMath, Start: l, End: l, Source: n.Expr,
@@ -179,7 +196,7 @@ func (d *doc) image(n *ast.Image) Block {
 	l := d.line(off)
 	blk := Block{Kind: Image, Start: l, End: l, Path: string(n.Destination),
 		Alt: string(altText(n, d.src)), Keep: true}
-	if rest := d.withoutImages(n, l); strings.TrimSpace(rest) == "" {
+	if rest := d.withoutImages(n, l); strings.TrimSpace(rest) == "" && !inTableCell(n) {
 		blk.Keep = false
 	}
 	// Indent: where the paragraph's text starts (after quote or list marks).
@@ -190,6 +207,78 @@ func (d *doc) image(n *ast.Image) Block {
 		}
 	}
 	return blk
+}
+
+// inTableCell reports whether n is in a table: a cell is a part of its row's
+// line, so the line is never replaced by the image.
+func inTableCell(n ast.Node) bool {
+	for p := n.Parent(); p != nil; p = p.Parent() {
+		if p.Kind() == extast.KindTableCell {
+			return true
+		}
+	}
+	return false
+}
+
+// htmlImages returns the <img> tags in HTML (a block, or a tag inside a
+// paragraph when inline). An image whose line holds nothing but tags replaces
+// the line; one with text around it, or inline, keeps it. HTML comments are
+// skipped.
+func (d *doc) htmlImages(segs *text.Segments, closed bool, closure text.Segment, inline bool) []Block {
+	var out []Block
+	all := []text.Segment{}
+	for i := 0; i < segs.Len(); i++ {
+		all = append(all, segs.At(i))
+	}
+	if closed && closure.Start < closure.Stop {
+		all = append(all, closure)
+	}
+	if len(all) == 0 || bytes.HasPrefix(bytes.TrimSpace(all[0].Value(d.src)), []byte("<!--")) {
+		return nil
+	}
+	for _, seg := range all {
+		v := seg.Value(d.src)
+		for _, tag := range imgTag.FindAll(v, -1) {
+			src := firstGroup(imgSrc.FindSubmatch(tag))
+			if src == "" {
+				continue
+			}
+			l := d.line(seg.Start)
+			line := d.lines[l-1]
+			// The line is replaced only when it holds nothing but tags (after
+			// the quote or list marks); otherwise the image goes below it.
+			text := line[min(d.col(seg.Start), len(line)):]
+			if inline {
+				text = strings.TrimLeft(line, " \t>")
+			}
+			blk := Block{Kind: Image, Start: l, End: l, Path: src, Alt: firstGroup(imgAlt.FindSubmatch(tag)),
+				Keep:   strings.TrimSpace(anyTag.ReplaceAllString(text, "")) != "" || inTableRow(line),
+				Indent: d.col(seg.Start)}
+			if m := imgWidth.FindSubmatch(tag); m != nil {
+				blk.Width, _ = strconv.Atoi(string(m[1]))
+			}
+			out = append(out, blk)
+		}
+	}
+	return out
+}
+
+// inTableRow reports whether line looks like a table row ("| a | b |").
+func inTableRow(line string) bool {
+	t := strings.TrimSpace(strings.TrimLeft(line, " \t>"))
+	return strings.HasPrefix(t, "|") && strings.Count(t, "|") >= 2
+}
+
+func firstGroup(m [][]byte) string {
+	if len(m) < 2 {
+		return ""
+	}
+	for _, g := range m[1:] {
+		if len(g) > 0 {
+			return string(g)
+		}
+	}
+	return ""
 }
 
 // withoutImages returns line l with the images (and links holding only an

@@ -1,12 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"image"
 	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"mdview/internal/blocks"
+	"mdview/internal/render"
 )
 
 func TestRenderAll(t *testing.T) {
@@ -139,5 +146,107 @@ func TestRunCanceled(t *testing.T) {
 	}
 	if err == nil {
 		t.Fatal("no error and no final call")
+	}
+}
+
+// A drawing outlives the job that started it, so a canceled job (a pause
+// while typing) does not throw away a slow diagram.
+func TestDrawSharedOutlivesCancel(t *testing.T) {
+	dir := t.TempDir()
+	req := request{Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16}, WidthPx: 640, HeightPx: 480}
+	b := blocks.Block{Kind: blocks.Mermaid, Start: 1, End: 4, Source: "graph TD\n  A-->B"}
+	st := render.Style{CellW: 8, CellH: 16, MaxW: 640, MaxH: 480}
+	p := &plugin{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if r := p.drawShared(ctx, req, st, b); !r.Pending && r.Path == "" {
+		t.Fatalf("canceled wait: %+v", r)
+	}
+	// The drawing finishes anyway and lands in the cache.
+	for i := 0; i < 100; i++ {
+		if r, done := p.prepare(req, st, b); done {
+			if r.Path == "" {
+				t.Fatalf("cached result: %+v", r)
+			}
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("never cached")
+}
+
+func TestFailureRemembered(t *testing.T) {
+	dir := t.TempDir()
+	req := request{Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16}, WidthPx: 640, HeightPx: 480}
+	b := blocks.Block{Kind: blocks.Mermaid, Start: 1, End: 3, Source: "graph TD\n  A -->"}
+	st := render.Style{CellW: 8, CellH: 16, MaxW: 640, MaxH: 480}
+	p := &plugin{}
+	if r := p.drawShared(context.Background(), req, st, b); r.Error == "" {
+		t.Fatalf("want an error: %+v", r)
+	}
+	// The same block on other lines: answered from memory, without drawing.
+	moved := b
+	moved.Start, moved.End = 10, 12
+	r, done := p.prepare(req, st, moved)
+	if !done || r.Error == "" || r.Start != 10 {
+		t.Fatalf("remembered: %+v %v", r, done)
+	}
+}
+
+func TestImgWidthNarrows(t *testing.T) {
+	st := blockStyle(render.Style{CellW: 8, MaxW: 640}, blocks.Block{Kind: blocks.Image, Width: 200, Indent: 2})
+	if st.MaxW != 200 {
+		t.Fatalf("MaxW %d", st.MaxW)
+	}
+}
+
+// TestContract writes what "render" returns for a small document to
+// ../test/contract.json (MDVIEW_UPDATE=1) or checks it is unchanged. The Vim
+// tests read the same file into s:build_view, so a renamed field on either
+// side fails a test.
+func TestContract(t *testing.T) {
+	dir := t.TempDir()
+	png0, _ := os.Create(filepath.Join(dir, "a.png"))
+	png.Encode(png0, image.NewRGBA(image.Rect(0, 0, 16, 16)))
+	png0.Close()
+	lines := []string{
+		"# Title",
+		"```mermaid", "graph TD", "  A-->B", "```",
+		"text $x^2$ and ![a](a.png) here",
+		"| ![a](a.png) | cell |",
+		"> ![a](a.png)",
+		"```mermaid", "graph TD", "  A -->", "```",
+	}
+	req := request{Lines: lines, Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16},
+		WidthPx: 640, HeightPx: 480, InlineMath: 1}
+	rs, err := (&plugin{}).renderAll(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the fields, not the values that depend on the renderers.
+	for i := range rs {
+		if rs[i].Path != "" {
+			rs[i].Key, rs[i].Path, rs[i].W, rs[i].H, rs[i].Rows = fmt.Sprintf("k%d", i), "/x", 16, 32, 2
+		}
+		if rs[i].Error != "" {
+			rs[i].Error = "error"
+		}
+	}
+	got, err := json.MarshalIndent(map[string]any{"lines": lines, "results": rs}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden := filepath.Join("..", "test", "contract.json")
+	if os.Getenv("MDVIEW_UPDATE") != "" {
+		if err := os.WriteFile(golden, append(got, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(golden)
+	if err != nil {
+		t.Fatalf("%v (run with MDVIEW_UPDATE=1)", err)
+	}
+	if string(bytes.TrimSpace(want)) != string(got) {
+		t.Fatalf("contract changed; check test/test_contract.vim and run with MDVIEW_UPDATE=1\n%s", got)
 	}
 }

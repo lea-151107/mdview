@@ -99,8 +99,16 @@ func Prune(dir string, age time.Duration) {
 		return
 	}
 	limit := time.Now().Add(-age)
+	stale := time.Now().Add(-time.Hour)
 	for _, de := range ents {
 		name := de.Name()
+		if strings.HasPrefix(name, ".results-") || strings.HasPrefix(name, ".tmp-") {
+			// Results Vim never read (it was closed), or a write cut short.
+			if info, err := de.Info(); err == nil && info.ModTime().Before(stale) {
+				os.Remove(filepath.Join(dir, name))
+			}
+			continue
+		}
 		if !strings.HasSuffix(name, ".rgb") {
 			continue
 		}

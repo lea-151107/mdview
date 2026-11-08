@@ -1,0 +1,94 @@
+{
+  "lines": [
+    "# Title",
+    "```mermaid",
+    "graph TD",
+    "  A--\u003eB",
+    "```",
+    "text $x^2$ and ![a](a.png) here",
+    "| ![a](a.png) | cell |",
+    "\u003e ![a](a.png)",
+    "```mermaid",
+    "graph TD",
+    "  A --\u003e",
+    "```"
+  ],
+  "results": [
+    {
+      "kind": "heading",
+      "start": 1,
+      "end": 1,
+      "col": 0,
+      "col_end": 0
+    },
+    {
+      "kind": "mermaid",
+      "start": 2,
+      "end": 5,
+      "key": "k1",
+      "path": "/x",
+      "w": 16,
+      "h": 32,
+      "rows": 2,
+      "col": 0,
+      "col_end": 0
+    },
+    {
+      "kind": "inline_math",
+      "start": 6,
+      "end": 6,
+      "text": [
+        "x²"
+      ],
+      "col": 5,
+      "col_end": 10
+    },
+    {
+      "kind": "image",
+      "start": 6,
+      "end": 6,
+      "key": "k3",
+      "path": "/x",
+      "w": 16,
+      "h": 32,
+      "rows": 2,
+      "keep": true,
+      "col": 0,
+      "col_end": 0
+    },
+    {
+      "kind": "image",
+      "start": 7,
+      "end": 7,
+      "key": "k4",
+      "path": "/x",
+      "w": 16,
+      "h": 32,
+      "rows": 2,
+      "keep": true,
+      "col": 0,
+      "col_end": 0
+    },
+    {
+      "kind": "image",
+      "start": 8,
+      "end": 8,
+      "key": "k5",
+      "path": "/x",
+      "w": 16,
+      "h": 32,
+      "rows": 2,
+      "indent": 2,
+      "col": 0,
+      "col_end": 0
+    },
+    {
+      "kind": "mermaid",
+      "start": 9,
+      "end": 12,
+      "error": "error",
+      "col": 0,
+      "col_end": 0
+    }
+  ]
+}

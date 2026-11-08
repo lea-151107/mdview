@@ -22,6 +22,7 @@ let s:next_id = 1     " text property ids, unique over all buffers
 let s:pruned = 0
 let s:resize_timer = 0
 let s:syncing = 0     " moving one of source and viewer to follow the other
+let s:clear_timer = 0
 
 function! s:bin() abort
   return expand(get(g:, 'mdview_bin', s:root . '/bin/mdview'))
@@ -58,11 +59,12 @@ function! s:init() abort
   highlight default link MdviewText Normal
   highlight default link MdviewError ErrorMsg
   highlight default link MdviewPending Comment
+  highlight default link MdviewMath Special
   " Only attributes: combined with the colors of the markdown syntax.
   highlight default MdviewHeading term=bold cterm=bold gui=bold
   for [name, hl] in [['mdview_anchor', ''], ['mdview_anchor_end', ''],
         \ ['mdview_text', 'MdviewText'], ['mdview_error', 'MdviewError'],
-        \ ['mdview_pending', 'MdviewPending']]
+        \ ['mdview_pending', 'MdviewPending'], ['mdview_math', 'MdviewMath']]
     if empty(prop_type_get(name))
       call prop_type_add(name, empty(hl) ? {} : #{highlight: hl})
     endif
@@ -149,6 +151,8 @@ function! mdview#open(...) abort
   call s:set_markdown_filetype()
   setlocal nofoldenable nonumber norelativenumber nolist signcolumn=no
   setlocal wrap linebreak conceallevel=2
+  " The viewer is rewritten at every drawing: no undo history to pile up.
+  setlocal undolevels=-1
   let b:mdview_source = src
   call setbufline(viewer, 1, getbufline(src, 1, '$'))
   setlocal nomodifiable nomodified
@@ -158,7 +162,6 @@ function! mdview#open(...) abort
   execute 'augroup mdview_view_' . viewer
     autocmd!
     execute 'autocmd BufWipeout <buffer=' . viewer . '> call s:detach(' . src . ')'
-    execute 'autocmd CursorMoved <buffer=' . viewer . '> call s:follow_back(' . src . ')'
   augroup END
 
   let state.viewer = viewer
@@ -293,6 +296,9 @@ function! mdview#refresh(...) abort
         \ remote: get(g:, 'mdview_remote', 0) ? 1 : 0,
         \ }
   let state.width = info.width
+  let state.height = info.height
+  let state.cell = cell
+  let state.cols = cols
   let state.colors = [bg, fg]
   try
     if !s:pruned
@@ -358,10 +364,22 @@ endfunction
 
 " Called by the binary, several times per request: first with what is ready
 " at once (blocks still being drawn have pending set), then as blocks finish,
-" the last time with meta.final set. results: [{kind, start, end, key, path,
-" w, h, rows, text, error, keep, indent, pending, col, col_end}], ordered by
-" start. meta: {id, final}; results of an older request are dropped.
+" the last time with meta.final set. results (or a JSON file holding them):
+" [{kind, start, end, key, path, w, h, rows, text, error, keep, indent,
+" pending, col, col_end}], ordered by start. meta: {id, final, seq}; results
+" of an older request are dropped.
 function! mdview#apply(src, tick, results, ...) abort
+  let results = a:results
+  if type(results) == v:t_string
+    " The binary passes the results as a file (a large argument of a channel
+    " call is not freed by Vim). Read it and delete it.
+    let path = results
+    try
+      let results = json_decode(join(readfile(path), "\n"))
+    finally
+      call delete(path)
+    endtry
+  endif
   let state = s:state(a:src)
   if empty(state)
     return
@@ -383,20 +401,26 @@ function! mdview#apply(src, tick, results, ...) abort
   if meta.final
     let state.retry = 0
   endif
-  let state.results = a:results
+  let state.results = results
   let state.tick = a:tick
   call s:draw(a:src, state)
 endfunction
 
 " Build the viewer's lines from the source and the results.
-" Returns {lines, map, rmap, anchors, props}: map[i] is the viewer line of
-" source line i+1, rmap[j] the source line of viewer line j+1.
+" Returns {lines, sig, map, rmap, anchors, props}: map[i] is the viewer line of
+" source line i+1, rmap[j] the source line of viewer line j+1, sig[j] a
+" signature of viewer line j+1 (its text, properties and image) used to update
+" only the lines that changed.
 "
 " Results with the same start and end form a group (several images on one
 " line). A group replaces its lines with its images (or text), unless it is
 " kept (an image inside text): then the lines stay and the images follow.
-" Headings only add bold to their lines; inline math replaces part of a line.
-function! s:build_view(src, results) abort
+" The images of a group go side by side while they fit opts.cols, each row of
+" images as tall as its tallest. Headings add bold to their lines; inline
+" math replaces part of a line. opts: {cellw, cols, prev}; prev maps
+" "kind:start" to an earlier image result, shown while a block is redrawn.
+function! s:build_view(src, results, ...) abort
+  let opts = extend(#{cellw: 8, cols: 80, prev: {}}, a:0 ? a:1 : {})
   let src_lines = getbufline(a:src, 1, '$')
   let n = len(src_lines)
   let groups = []
@@ -414,15 +438,22 @@ function! s:build_view(src, results) abort
         endif
         call add(inline[r.start], [r.col, r.col_end, r.text[0]])
       endif
-    elseif !empty(groups) && groups[-1].start == r.start && groups[-1].end == r.end
-          \ && groups[-1].keep == get(r, 'keep', 0)
-      call add(groups[-1].items, r)
-    elseif empty(groups) || r.start > groups[-1].end
-      call add(groups, #{start: r.start, end: r.end, keep: get(r, 'keep', 0), items: [r]})
+    else
+      if get(r, 'pending', 0) && has_key(opts.prev, r.kind . ':' . r.start)
+        " Still drawing: keep showing the image it had.
+        let r = extend(copy(opts.prev[r.kind . ':' . r.start]),
+              \ #{start: r.start, end: r.end, keep: get(r, 'keep', 0), indent: get(r, 'indent', 0)})
+      endif
+      if !empty(groups) && groups[-1].start == r.start && groups[-1].end == r.end
+            \ && groups[-1].keep == get(r, 'keep', 0)
+        call add(groups[-1].items, r)
+      elseif empty(groups) || r.start > groups[-1].end
+        call add(groups, #{start: r.start, end: r.end, keep: get(r, 'keep', 0), items: [r]})
+      endif
     endif
   endfor
 
-  let v = #{lines: [], map: [], rmap: [], anchors: [], props: []}
+  let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: []}
   let i = 1
   for g in groups
     while i < g.start && i <= n
@@ -437,30 +468,26 @@ function! s:build_view(src, results) abort
     else
       call extend(v.map, repeat([len(v.lines) + 1], g.end - g.start + 1))
     endif
+    let first_line = src_lines[g.start - 1]
+    " Image rows keep the quote marks of the block ("> > "), so the quote's
+    " bar goes on beside the image.
+    let quote = substitute(matchstr(first_line, '^\s*\%(>\s\?\)\+'), '\s\+$', '', '')
+    let images = filter(copy(g.items), {_, r -> !empty(get(r, 'path', ''))})
+    call s:add_images(v, images, g.start, quote, opts, first_line)
     for r in g.items
-      let indent = repeat(' ', get(r, 'indent', 0))
       if !empty(get(r, 'path', ''))
-        let first = len(v.lines) + 1
-        let rows = max([1, r.rows])
-        call extend(v.lines, repeat([''], rows))
-        call extend(v.rmap, repeat([r.start], rows))
-        let s:next_id += 1
-        call add(v.anchors, #{id: s:next_id, key: r.key, path: r.path, w: r.w, h: r.h,
-              \ first: first, last: first + rows - 1, indent: get(r, 'indent', 0)})
-      elseif !empty(get(r, 'text', []))
+        continue
+      endif
+      let indent = repeat(' ', s:display_indent(first_line, get(r, 'indent', 0)))
+      if !empty(get(r, 'text', []))
         for t in r.text
-          call add(v.lines, empty(t) ? '' : indent . t)
-          call add(v.rmap, r.start)
-          if !empty(t)
-            call add(v.props, [len(v.lines), 'mdview_text', len(indent . t)])
-          endif
+          let line = empty(t) ? '' : indent . t
+          call s:add_line(v, line, r.start, empty(t) ? [] : [[1, 'mdview_text', len(line)]])
         endfor
       else
         let pending = get(r, 'pending', 0)
         let msg = indent . 'mdview: ' . (pending ? 'drawing…' : get(r, 'error', 'cannot draw'))
-        call add(v.lines, msg)
-        call add(v.rmap, r.end)
-        call add(v.props, [len(v.lines), pending ? 'mdview_pending' : 'mdview_error', len(msg)])
+        call s:add_line(v, msg, r.end, [[1, pending ? 'mdview_pending' : 'mdview_error', len(msg)]])
       endif
     endfor
     let i = g.end + 1
@@ -472,22 +499,82 @@ function! s:build_view(src, results) abort
   return v
 endfunction
 
-" Copy source line l to the viewer, with its inline math replaced and bold
-" when it is a heading.
-function! s:copy_line(v, src_lines, l, headings, inline) abort
-  let t = a:src_lines[a:l - 1]
-  " Replace from the right so the byte columns stay valid.
-  for [c, e, text] in sort(copy(get(a:inline, a:l, [])), {x, y -> y[0] - x[0]})
-    let t = strpart(t, 0, c) . text . strpart(t, e)
-  endfor
-  call add(a:v.lines, t)
-  call add(a:v.map, len(a:v.lines))
-  call add(a:v.rmap, a:l)
-  if has_key(a:headings, a:l) && !empty(t)
-    call add(a:v.props, [len(a:v.lines), 'mdview_heading', len(t)])
-  endif
+" The display column of byte offset col in line (tabs expanded).
+function! s:display_indent(line, col) abort
+  return strdisplaywidth(strpart(a:line, 0, a:col))
 endfunction
 
+" Lay out images side by side in rows of opts.cols columns, each row of
+" images on as many viewer lines as its tallest image.
+function! s:add_images(v, images, src_line, quote, opts, first_line) abort
+  let rows = []   " [[image, x], ...]
+  let x = 0
+  for r in a:images
+    let indent = s:display_indent(a:first_line, get(r, 'indent', 0))
+    let w = (r.w + a:opts.cellw - 1) / a:opts.cellw
+    if empty(rows) || x + w > a:opts.cols - indent
+      call add(rows, [])
+      let x = 0
+    endif
+    call add(rows[-1], [r, x, indent])
+    let x += w + 1
+  endfor
+  for row in rows
+    let first = len(a:v.lines) + 1
+    let height = max(map(copy(row), {_, it -> max([1, it[0].rows])}))
+    let sig = 'img:' . join(map(copy(row), {_, it -> it[0].key . '@' . (it[1] + it[2])}), ',')
+    for k in range(height)
+      call add(a:v.lines, a:quote)
+      call add(a:v.sig, sig . '#' . k . '/' . height . '|' . a:quote)
+      call add(a:v.rmap, a:src_line)
+    endfor
+    for [r, x, indent] in row
+      let s:next_id += 1
+      call add(a:v.anchors, #{id: s:next_id, key: r.key, path: r.path, w: r.w, h: r.h,
+            \ first: first, last: first + max([1, r.rows]) - 1, indent: indent + x})
+    endfor
+  endfor
+endfunction
+
+" Add a line with properties [[col, type, length]] (col 1-based).
+function! s:add_line(v, line, src_line, props) abort
+  call add(a:v.lines, a:line)
+  call add(a:v.rmap, a:src_line)
+  let lnum = len(a:v.lines)
+  for [c, type, len] in a:props
+    call add(a:v.props, [lnum, type, len, c])
+  endfor
+  call add(a:v.sig, a:line . "\x01" . string(a:props))
+endfunction
+
+" Copy source line l to the viewer, with its inline math replaced (and
+" highlighted) and bold when it is a heading.
+function! s:copy_line(v, src_lines, l, headings, inline) abort
+  let src = a:src_lines[a:l - 1]
+  let t = ''
+  let props = []
+  let pos = 0
+  for [c, e, text] in sort(copy(get(a:inline, a:l, [])), {x, y -> x[0] - y[0]})
+    if c < pos
+      continue
+    endif
+    let t .= strpart(src, pos, c - pos)
+    call add(props, [len(t) + 1, 'mdview_math', len(text)])
+    let t .= text
+    let pos = e
+  endfor
+  let t .= strpart(src, pos)
+  if has_key(a:headings, a:l) && !empty(t)
+    call insert(props, [1, 'mdview_heading', len(t)])
+  endif
+  call add(a:v.map, len(a:v.lines) + 1)
+  call s:add_line(a:v, t, a:l, props)
+endfunction
+
+" Draw the results into the viewer, changing only the lines whose signature
+" changed: the lines (with their properties and popups) before and after the
+" change stay as they are, so the images there are not sent to the terminal
+" again.
 function! s:draw(src, state) abort
   let viewer = a:state.viewer
   " Where each viewer window is, as a source line, to come back to it.
@@ -497,29 +584,93 @@ function! s:draw(src, state) abort
     let views[win] = #{top: get(a:state.rmap, info.topline - 1, 1),
           \ cur: get(a:state.rmap, getcurpos(win)[1] - 1, 1)}
   endfor
-  for [win, p] in items(s:popups)
-    if p.src == a:src
-      call s:close_popups(str2nr(win))
+  let prev = get(a:state, 'prev', {})
+  let v = s:build_view(a:src, a:state.results,
+        \ #{cellw: get(a:state, 'cell', [8, 16])[0], cols: get(a:state, 'cols', 80), prev: prev})
+  " Remember the images, for blocks that are redrawn later.
+  for r in a:state.results
+    if !empty(get(r, 'path', ''))
+      let prev[r.kind . ':' . r.start] = r
     endif
   endfor
+  let a:state.prev = prev
 
-  let v = s:build_view(a:src, a:state.results)
-  call setbufvar(viewer, '&modifiable', 1)
-  silent call deletebufline(viewer, 1, '$')
-  call setbufline(viewer, 1, v.lines)
-  for [lnum, type, len] in v.props
-    call prop_add(lnum, 1, #{bufnr: viewer, type: type, length: len})
+  let old_sig = get(a:state, 'sig', [])
+  if empty(old_sig)
+    let old_sig = map(getbufline(viewer, 1, '$'), {_, l -> 'initial'})
+  endif
+  let old_anchors = get(a:state, 'anchors', [])
+  let [p, q] = s:unchanged(old_sig, v.sig, old_anchors, v.anchors)
+  let oldn = len(old_sig)
+  let newn = len(v.sig)
+  let delta = newn - oldn
+
+  let moved = 0
+  if p + q < max([oldn, newn]) || oldn != newn
+    call setbufvar(viewer, '&modifiable', 1)
+    if p == 0 && q == 0
+      silent call deletebufline(viewer, 1, '$')
+      call setbufline(viewer, 1, v.lines)
+    else
+      if oldn - q > p
+        silent call deletebufline(viewer, p + 1, oldn - q)
+      endif
+      if newn - q > p
+        call appendbufline(viewer, p, v.lines[p : newn - q - 1])
+      endif
+    endif
+    for [lnum, type, len, col] in v.props
+      if lnum > p && lnum <= newn - q
+        call prop_add(lnum, col, #{bufnr: viewer, type: type, length: len})
+      endif
+    endfor
+    call setbufvar(viewer, '&modifiable', 0)
+    call setbufvar(viewer, '&modified', 0)
+  endif
+
+  " Anchors: the unchanged ones keep their ids, properties and popups (moved
+  " by delta after the change); those in the changed lines are new.
+  let kept_before = filter(copy(old_anchors), {_, a -> a.last <= p})
+  let kept_after = filter(copy(old_anchors), {_, a -> a.first > oldn - q})
+  let removed = filter(copy(old_anchors), {_, a -> a.last > p && a.first <= oldn - q})
+  let added = filter(copy(v.anchors), {_, a -> a.first > p && a.last <= newn - q})
+  for a in kept_after
+    let a.first += delta
+    let a.last += delta
   endfor
-  for a in v.anchors
+  for a in added
     call prop_add(a.first, 1, #{bufnr: viewer, type: 'mdview_anchor', id: a.id, length: 0})
     call prop_add(a.last, 1, #{bufnr: viewer, type: 'mdview_anchor_end', id: a.id, length: 0})
   endfor
-  call setbufvar(viewer, '&modifiable', 0)
-  call setbufvar(viewer, '&modified', 0)
+  let a:state.anchors = kept_before + added + kept_after
+  let a:state.sig = v.sig
   let a:state.map = v.map
   let a:state.rmap = v.rmap
-  let a:state.anchors = v.anchors
-  let a:state.gen += 1
+  if empty(get(a:state, 'gen', 0))
+    let a:state.gen = 1
+  endif
+
+  " Popups of the windows that have them: close the removed, add the new.
+  let removed_ids = {}
+  for a in removed
+    let removed_ids[a.id] = 1
+  endfor
+  for [win, pp] in items(s:popups)
+    if pp.src != a:src || pp.gen != a:state.gen
+      continue
+    endif
+    for it in filter(copy(pp.items), {_, it -> has_key(removed_ids, it.anchor.id)})
+      call popup_close(it.pid)
+    endfor
+    call filter(pp.items, {_, it -> !has_key(removed_ids, it.anchor.id)})
+    for a in added
+      let it = s:popup_for(str2nr(win), a)
+      if !empty(it)
+        call add(pp.items, it)
+      endif
+    endfor
+  endfor
+  let moved = !empty(removed) || !empty(added) || (delta != 0 && !empty(kept_after))
 
   for [win, pos] in items(views)
     let top = get(v.map, pos.top - 1, 1)
@@ -531,6 +682,41 @@ function! s:draw(src, state) abort
     call s:follow(a:src)
   endif
   call s:discard_unused()
+  if moved
+    call s:schedule_clear()
+  endif
+endfunction
+
+" The numbers of leading and trailing lines whose signatures are the same,
+" not splitting an image (an image that is only partly unchanged is redrawn).
+function! s:unchanged(old, new, old_anchors, new_anchors) abort
+  let oldn = len(a:old)
+  let newn = len(a:new)
+  let p = 0
+  while p < oldn && p < newn && a:old[p] ==# a:new[p]
+    let p += 1
+  endwhile
+  let q = 0
+  while q < oldn - p && q < newn - p && a:old[oldn - 1 - q] ==# a:new[newn - 1 - q]
+    let q += 1
+  endwhile
+  let changed = 1
+  while changed
+    let changed = 0
+    for [anchors, n] in [[a:old_anchors, oldn], [a:new_anchors, newn]]
+      for a in anchors
+        if a.first <= p && a.last > p
+          let p = a.first - 1
+          let changed = 1
+        endif
+        if a.first <= n - q && a.last > n - q
+          let q = n - a.last
+          let changed = 1
+        endif
+      endfor
+    endfor
+  endwhile
+  return [p, q]
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -556,24 +742,38 @@ function! s:follow(src) abort
   endtry
 endfunction
 
-" With g:mdview_sync_back, moving in the viewer moves the source too (the
-" other way of s:follow; s:syncing keeps them from chasing each other).
-function! s:follow_back(src) abort
+" With g:mdview_sync_back, scrolling the viewer scrolls the source too (the
+" other way of s:follow; s:syncing keeps them from chasing each other). Only
+" the source's view moves, not its cursor.
+function! s:follow_back(src, win) abort
   let state = s:state(a:src)
   if !get(g:, 'mdview_sync_back', 0) || empty(state) || state.here || s:syncing
-        \ || bufnr('%') != state.viewer
+        \ || win_getid() != a:win
     return
   endif
-  let sl = get(state.rmap, line('.') - 1, 1)
+  let info = getwininfo(a:win)[0]
+  let top = get(state.rmap, info.topline - 1, 1)
   let s:syncing = 1
   try
     for win in win_findbuf(a:src)
-      let off = min([winline() - 1, winheight(win) - 1])
-      call win_execute(win, 'call winrestview(#{topline: ' . max([1, sl - off]) . ', lnum: ' . sl . ', col: 0})')
+      call win_execute(win, 'call s:set_topline(' . top . ')')
     endfor
   finally
     let s:syncing = 0
   endtry
+endfunction
+
+" Scroll the current window so that line top is at the top, keeping the
+" cursor where it is when it stays visible.
+function! s:set_topline(top) abort
+  let view = winsaveview()
+  let view.topline = a:top
+  let lnum = line('.')
+  let bot = a:top + winheight(0) - 1
+  if lnum < a:top || lnum > bot
+    let view.lnum = lnum < a:top ? a:top : bot
+  endif
+  call winrestview(view)
 endfunction
 
 " <CR> in the viewer: go to the source line of the cursor line.
@@ -686,29 +886,40 @@ endfunction
 function! s:make_popups(win, src, state) abort
   let items = []
   for a in get(a:state, 'anchors', [])
-    let img = s:image_id(a)
-    if img < 0
-      continue
+    let it = s:popup_for(a:win, a)
+    if !empty(it)
+      call add(items, it)
     endif
-    let mode = s:mode(a:win, a)
-    let opts = extend(#{
-          \ image: #{id: img},
-          \ posinvert: 0,
-          \ clipwindow: 1,
-          \ fixed: 1,
-          \ wrap: 0,
-          \ zindex: 20,
-          \ padding: [0, 0, 0, 0],
-          \ border: [0, 0, 0, 0],
-          \ scrollbar: 0,
-          \ }, s:popup_opts(a:win, a, mode))
-    try
-      call add(items, #{pid: popup_create('', opts), anchor: a, mode: mode, img: img})
-    catch
-      call s:warn(v:exception)
-    endtry
   endfor
-  let s:popups[a:win] = #{src: a:src, gen: a:state.gen, items: items}
+  let s:popups[a:win] = #{src: a:src, gen: a:state.gen, items: items,
+        \ top: getwininfo(a:win)[0].topline}
+endfunction
+
+" A popup showing the image of anchor a in window win, as an item of
+" s:popups ({pid, anchor, mode, img}), or {} when the image cannot be loaded.
+function! s:popup_for(win, a) abort
+  let img = s:image_id(a:a)
+  if img < 0
+    return {}
+  endif
+  let mode = s:mode(a:win, a:a)
+  let opts = extend(#{
+        \ image: #{id: img},
+        \ posinvert: 0,
+        \ clipwindow: 1,
+        \ fixed: 1,
+        \ wrap: 0,
+        \ zindex: 20,
+        \ padding: [0, 0, 0, 0],
+        \ border: [0, 0, 0, 0],
+        \ scrollbar: 0,
+        \ }, s:popup_opts(a:win, a:a, mode))
+  try
+    return #{pid: popup_create('', opts), anchor: a:a, mode: mode, img: img}
+  catch
+    call s:warn(v:exception)
+    return {}
+  endtry
 endfunction
 
 function! s:update_modes(win) abort
@@ -726,9 +937,49 @@ function! s:update_modes(win) abort
 endfunction
 
 function! s:on_scrolled() abort
-  for win in keys(s:popups)
+  for [win, p] in items(s:popups)
     call s:update_modes(str2nr(win))
+    let top = get(getwininfo(str2nr(win)), 0, #{topline: p.top}).topline
+    if top != p.top
+      let p.top = top
+      if !empty(p.items)
+        call s:schedule_clear()
+      endif
+      call s:follow_back(p.src, str2nr(win))
+    endif
   endfor
+endfunction
+
+" A terminal keeps the pixels of a sixel image until the cells under it are
+" written again, and Vim only writes the cells that changed. When the images
+" move (a scroll, a new drawing), the old pixels stay behind, and the popup's
+" background may cover the new ones. Clearing the screen (:redraw!) wipes the
+" old pixels and makes Vim send every visible image again. Done once shortly
+" after the last move.
+function! s:schedule_clear() abort
+  if !s:clear_enabled()
+    return
+  endif
+  call timer_stop(s:clear_timer)
+  let s:clear_timer = timer_start(30, {-> s:clear_now()})
+endfunction
+
+function! s:clear_now() abort
+  " Only when a window shows images.
+  if empty(filter(values(s:popups), {_, p -> !empty(p.items)}))
+    return
+  endif
+  redraw!
+endfunction
+
+" g:mdview_clear_redraw: 1 on, 0 off, -1 (default) only with sixel, the
+" backend that leaves the old pixels behind.
+function! s:clear_enabled() abort
+  let v = get(g:, 'mdview_clear_redraw', -1)
+  if v >= 0
+    return v
+  endif
+  return exists('v:imagebackend') && v:imagebackend ==# 'sixel'
 endfunction
 
 function! s:close_popups(win) abort
@@ -886,7 +1137,7 @@ function! s:on_term_colors() abort
   endfor
 endfunction
 
-" Draw again when a viewer's width changed (the images fit the width).
+" Draw again when a viewer's size changed.
 function! s:on_resized() abort
   call timer_stop(s:resize_timer)
   let s:resize_timer = timer_start(300, {-> s:resized()})
@@ -896,7 +1147,9 @@ function! s:resized() abort
   for src in s:sources()
     let state = s:state(src)
     let wins = win_findbuf(state.viewer)
-    if !empty(wins) && winwidth(wins[0]) != get(state, 'width', -1)
+    if !empty(wins) && (winwidth(wins[0]) != get(state, 'width', -1)
+          \ || winheight(wins[0]) != get(state, 'height', -1))
+      " Images fit the width, and their height is capped by the window's.
       call mdview#refresh(src)
     endif
   endfor

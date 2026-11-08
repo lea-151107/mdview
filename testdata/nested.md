@@ -71,3 +71,24 @@ $$x$$
 
 二次方程式 $ax^2 + bx + c = 0$ の解は $x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}$ です。
 $5 と $10 は数式になりません。`$code$` もそのままです。
+
+## レビューで見つかったケース
+
+表のセルの画像（行は残し、その下に描く）:
+
+| 画像 | 説明 |
+|------|------|
+| ![セル](gradient.png) | 表の行は消えない |
+
+HTML の画像:
+
+<p align="center"><img src="gradient.png" width="60" alt="中央のロゴ"></p>
+
+文中の <img src="gradient.png"> HTML 画像。
+
+段落の途中の \[1] は数式にならない:
+参考文献
+\[1] 著者 ![文献の図](gradient.png)
+の続き。
+
+シェルの変数は数式にならない: export PATH=$HOME/bin:$PATH

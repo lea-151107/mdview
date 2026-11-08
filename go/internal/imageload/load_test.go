@@ -56,7 +56,7 @@ func TestSVG(t *testing.T) {
 	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect width="20" height="10" fill="red"/></svg>`
 	os.WriteFile(filepath.Join(dir, "a.svg"), []byte(svg), 0o644)
 	img, err := load(t, dir, "a.svg", false)
-	if err != nil || img.Bounds().Dx() != svgWidthPx || img.Bounds().Dy() != svgWidthPx/2 {
+	if err != nil || img.Bounds().Dx() != 20 || img.Bounds().Dy() != 10 {
 		t.Fatalf("%v %v", img, err)
 	}
 }

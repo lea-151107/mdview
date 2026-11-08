@@ -192,3 +192,40 @@ func FuzzParseRanges(f *testing.F) {
 		}
 	})
 }
+
+// Cases found by the adversarial review of the goldmark branch.
+func TestReviewCases(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		want []Block
+	}{
+		{"image in a table cell keeps the row", "| a | b |\n|---|---|\n| ![x](x.png) | y |",
+			[]Block{{Kind: Image, Start: 3, End: 3, Path: "x.png", Alt: "x", Keep: true, Indent: 2}}},
+		{"\\[ does not interrupt a paragraph", "Intro text\n\\[1] ref ![a](a.png)\nmore",
+			[]Block{{Kind: Image, Start: 2, End: 2, Path: "a.png", Alt: "a", Keep: true}}},
+		{"unclosed $$ does not swallow lines", "$$\nnot closed ![a](a.png)\n\nnext",
+			[]Block{{Kind: Image, Start: 2, End: 2, Path: "a.png", Alt: "a", Keep: true}}},
+		{"\\[ block still works", "text\n\n\\[\nx^2\n\\]",
+			[]Block{{Kind: Math, Start: 3, End: 5, Source: "x^2"}}},
+		{"html img block", "<p align=\"center\"><img src=\"logo.png\" width=\"200\" alt=\"Logo\"></p>",
+			[]Block{{Kind: Image, Start: 1, End: 1, Path: "logo.png", Alt: "Logo", Width: 200}}},
+		{"html img inline", "see <img src='a.png'> here",
+			[]Block{{Kind: Image, Start: 1, End: 1, Path: "a.png", Keep: true, Indent: 4}}},
+		{"html img alone in a paragraph", "<img src=a.png width=50px>\ntext",
+			[]Block{{Kind: Image, Start: 1, End: 1, Path: "a.png", Width: 50}}},
+		{"html comment", "<!--\n<img src=\"a.png\">\n-->", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := drawn(Parse(strings.Split(c.doc, "\n")))
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got\n%#v\nwant\n%#v", got, c.want)
+			}
+		})
+	}
+	// Shell variables are not inline math.
+	if got := ofKind(Parse([]string{"export PATH=$HOME/bin:$PATH now", "a $x$, b"}), InlineMath); len(got) != 1 || got[0].Source != "x" {
+		t.Fatalf("inline math: %#v", got)
+	}
+}

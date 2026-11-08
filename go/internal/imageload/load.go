@@ -35,9 +35,6 @@ const (
 	// MaxPixels bounds the decoded size of an image, checked before
 	// decoding so that a small file cannot expand into gigabytes.
 	MaxPixels = 40_000_000
-	// svgWidthPx is the width SVG images are rasterized at (then scaled
-	// down to the window).
-	svgWidthPx = 1600
 	// remoteTimeout bounds one download.
 	remoteTimeout = 10 * time.Second
 	// svgTimeout bounds one rsvg-convert run.
@@ -103,10 +100,14 @@ func IsRemote(dest string) bool {
 }
 
 // Stamp returns a string that changes when the image may have changed, for
-// the cache key: the modification time and size of a file, the URL itself
-// otherwise.
+// the cache key: the modification time and size of a file; for a URL the
+// URL and today's date, so that a remote image (a CI badge, say) is fetched
+// again once a day; a data: URL itself.
 func (s Source) Stamp() (string, error) {
-	if s.Path == "" {
+	switch {
+	case s.Remote:
+		return s.Dest + "/" + time.Now().UTC().Format("2006-01-02"), nil
+	case s.Path == "":
 		return s.Dest, nil
 	}
 	info, err := os.Stat(s.Path)
@@ -231,7 +232,9 @@ func svgToPNG(ctx context.Context, svg []byte) ([]byte, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, svgTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "--format", "png", "--width", strconv.Itoa(svgWidthPx), "--keep-aspect-ratio")
+	// At the SVG's own size, like other images: a badge stays a badge
+	// (images are only ever scaled down to the window).
+	cmd := exec.CommandContext(ctx, bin, "--format", "png")
 	cmd.Stdin = bytes.NewReader(svg)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out

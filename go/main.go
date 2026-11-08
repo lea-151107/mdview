@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
 	"log"
+	"os"
 	"runtime"
 	"sync"
 	"time"
@@ -43,7 +45,29 @@ type plugin struct {
 
 	jobMu sync.Mutex
 	jobs  map[int]*job // by buffer number: the running render of a buffer
+
+	// Drawing is shared by cache key and outlives the job that started it:
+	// while typing, each pause starts a new job and cancels the old one, but
+	// a slow diagram keeps drawing and the next job waits for it. Failures
+	// are remembered for failTTL so that they are not drawn again at every
+	// pause.
+	flightMu sync.Mutex
+	flights  map[string]*flight
+	failed   map[string]failure
 }
+
+type flight struct {
+	done chan struct{}
+	r    result
+}
+
+type failure struct {
+	r  result
+	at time.Time
+}
+
+// failTTL is how long a failed drawing is not tried again.
+const failTTL = 30 * time.Second
 
 type job struct{ cancel context.CancelFunc }
 
@@ -133,16 +157,22 @@ func (p *plugin) render(ctx context.Context, h sdk.Host, params []any) (any, err
 	if cb == "" {
 		cb = "mdview#apply"
 	}
+	seq := 0
 	send := func(results []result, final bool) error {
 		if jctx.Err() != nil {
 			return jctx.Err()
 		}
-		out, err := sdk.Generic(shown(results))
+		// The results go through a file: Vim (9.2.1178) does not free a large
+		// argument of a channel "call", so passing them directly leaks
+		// memory at every drawing. Vim reads the file and deletes it.
+		seq++
+		path, err := writeResults(req, seq, shown(results))
 		if err != nil {
 			return err
 		}
-		meta := map[string]any{"id": req.ID, "final": final}
-		if _, err := h.Call(jctx, cb, req.Bufnr, req.Tick, out, meta); err != nil {
+		meta := map[string]any{"id": req.ID, "final": final, "seq": seq}
+		if _, err := h.Call(jctx, cb, req.Bufnr, req.Tick, path, meta); err != nil {
+			os.Remove(path)
 			return fmt.Errorf("%s: %w", cb, err)
 		}
 		return nil
@@ -161,6 +191,28 @@ func (p *plugin) render(ctx context.Context, h sdk.Host, params []any) (any, err
 		}
 	}()
 	return nil, nil
+}
+
+// writeResults writes results as JSON to a file in the cache directory and
+// returns its path.
+func writeResults(req request, seq int, results []result) (string, error) {
+	data, err := json.Marshal(results)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(req.CacheDir, 0o755); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(req.CacheDir, fmt.Sprintf(".results-%d-%d-%d-*.json", req.Bufnr, req.ID, seq))
+	if err != nil {
+		return "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), f.Close()
 }
 
 func check(req request) error {
@@ -233,7 +285,7 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 				}
 			}
 		case blocks.Mermaid, blocks.Math, blocks.Image:
-			r, done := prepare(req, blockStyle(st, b), b)
+			r, done := p.prepare(req, blockStyle(st, b), b)
 			if !done {
 				r.Pending = true
 				todo = append(todo, i)
@@ -264,17 +316,7 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 				return
 			}
 			defer func() { <-sem }()
-			bctx, cancel := context.WithTimeout(ctx, blockTimeout)
-			defer cancel()
-			bst := blockStyle(st, b)
-			r, err := sdk.Guard(bctx, func() (result, error) {
-				return draw(bctx, req, bst, b), nil
-			})
-			if err != nil {
-				r = base(b)
-				r.Error = err.Error()
-			}
-			ch <- done{i, r}
+			ch <- done{i, p.drawShared(ctx, req, blockStyle(st, b), b)}
 		}()
 	}
 	tick := time.NewTicker(flushInterval)
@@ -304,10 +346,14 @@ func base(b blocks.Block) result {
 	return result{Kind: string(b.Kind), Start: b.Start, End: b.End, Keep: b.Keep, Indent: b.Indent}
 }
 
-// blockStyle narrows the width for an indented block.
+// blockStyle narrows the width for an indented block, and for an image
+// with a width attribute (<img width="…">).
 func blockStyle(st render.Style, b blocks.Block) render.Style {
 	if b.Indent > 0 && st.MaxW > 0 {
 		st.MaxW = max(st.CellW, st.MaxW-b.Indent*st.CellW)
+	}
+	if b.Width > 0 && (st.MaxW == 0 || b.Width < st.MaxW) {
+		st.MaxW = b.Width
 	}
 	return st
 }
@@ -336,7 +382,7 @@ func cacheKey(req request, st render.Style, b blocks.Block) (key string, src ima
 
 // prepare returns the result of a block when it needs no drawing (cached,
 // or an error found at once); done is false when draw must run.
-func prepare(req request, st render.Style, b blocks.Block) (r result, done bool) {
+func (p *plugin) prepare(req request, st render.Style, b blocks.Block) (r result, done bool) {
 	r = base(b)
 	key, _, ok, err := cacheKey(req, st, b)
 	switch {
@@ -349,7 +395,73 @@ func prepare(req request, st render.Style, b blocks.Block) (r result, done bool)
 	if e, ok := cache.Load(req.CacheDir, key); ok {
 		return withEntry(r, key, e, st), true
 	}
+	p.flightMu.Lock()
+	f, ok := p.failed[key]
+	p.flightMu.Unlock()
+	if ok && time.Since(f.at) < failTTL {
+		return rebase(f.r, b), true
+	}
 	return r, false
+}
+
+// rebase puts the drawing of a result (made for one block) onto block b,
+// which has the same cache key but may be on other lines.
+func rebase(d result, b blocks.Block) result {
+	r := base(b)
+	r.Key, r.Path, r.W, r.H, r.Rows, r.Text, r.Error = d.Key, d.Path, d.W, d.H, d.Rows, d.Text, d.Error
+	return r
+}
+
+// drawShared draws b, sharing the drawing with any other job that needs the
+// same cache key. The drawing runs on its own context (bounded by
+// blockTimeout), so canceling ctx only stops the waiting.
+func (p *plugin) drawShared(ctx context.Context, req request, st render.Style, b blocks.Block) result {
+	key, _, ok, err := cacheKey(req, st, b)
+	if !ok || err != nil {
+		return draw(ctx, req, st, b)
+	}
+	p.flightMu.Lock()
+	f := p.flights[key]
+	if f == nil {
+		f = &flight{done: make(chan struct{})}
+		if p.flights == nil {
+			p.flights = map[string]*flight{}
+		}
+		p.flights[key] = f
+		go func() {
+			dctx, cancel := context.WithTimeout(context.Background(), blockTimeout)
+			defer cancel()
+			r, err := sdk.Guard(dctx, func() (result, error) {
+				return draw(dctx, req, st, b), nil
+			})
+			if err != nil {
+				r = base(b)
+				r.Error = err.Error()
+			}
+			p.flightMu.Lock()
+			f.r = r
+			delete(p.flights, key)
+			if r.Error != "" {
+				if p.failed == nil {
+					p.failed = map[string]failure{}
+				}
+				p.failed[key] = failure{r: r, at: time.Now()}
+			} else {
+				delete(p.failed, key)
+			}
+			p.flightMu.Unlock()
+			close(f.done)
+		}()
+	}
+	p.flightMu.Unlock()
+	select {
+	case <-f.done:
+		return rebase(f.r, b)
+	case <-ctx.Done():
+		r := base(b)
+		r.Pending = true
+		return r
+	}
 }
 
 // draw draws a block and stores it in the cache.

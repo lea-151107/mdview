@@ -64,30 +64,30 @@ type mathExtension struct{}
 
 func (mathExtension) Extend(m goldmark.Markdown) {
 	m.Parser().AddOptions(
-		parser.WithBlockParsers(util.Prioritized(mathBlockParser{}, 90)),
+		parser.WithBlockParsers(
+			util.Prioritized(mathBlockParser{open: "$$", close: "$$", interrupt: true}, 90),
+			// \[ does not interrupt a paragraph: "\[1] ref" (pandoc's escaped
+			// bracket) in the middle of a paragraph stays text.
+			util.Prioritized(mathBlockParser{open: `\[`, close: `\]`}, 91),
+		),
 		parser.WithInlineParsers(util.Prioritized(mathInlineParser{}, 150)),
 	)
 }
 
-type mathBlockParser struct{}
+type mathBlockParser struct {
+	open, close string
+	interrupt   bool
+}
 
-func (mathBlockParser) Trigger() []byte { return []byte{'$', '\\'} }
+func (p mathBlockParser) Trigger() []byte { return []byte{p.open[0]} }
 
-func (mathBlockParser) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
+func (p mathBlockParser) Open(parent ast.Node, reader text.Reader, pc parser.Context) (ast.Node, parser.State) {
 	line, seg := reader.PeekLine()
 	pos := pc.BlockOffset()
-	if pos < 0 || pos >= len(line) {
+	if pos < 0 || pos >= len(line) || !bytes.HasPrefix(line[pos:], []byte(p.open)) {
 		return nil, parser.NoChildren
 	}
-	var open, close []byte
-	switch {
-	case bytes.HasPrefix(line[pos:], []byte("$$")):
-		open, close = []byte("$$"), []byte("$$")
-	case bytes.HasPrefix(line[pos:], []byte(`\[`)):
-		open, close = []byte(`\[`), []byte(`\]`)
-	default:
-		return nil, parser.NoChildren
-	}
+	open, close := []byte(p.open), []byte(p.close)
 	rest := bytes.TrimSpace(line[pos+len(open):])
 	node := &MathBlock{Start: seg.Start + pos, Last: seg.Start + pos, close: close}
 	if i := bytes.Index(rest, close); i >= 0 {
@@ -97,12 +97,40 @@ func (mathBlockParser) Open(parent ast.Node, reader text.Reader, pc parser.Conte
 		}
 		node.Expr = append(node.Expr, bytes.TrimSpace(rest[:i])...)
 		node.Closed = true
-	} else if len(rest) > 0 {
-		node.Expr = append(node.Expr, rest...)
-		node.Expr = append(node.Expr, '\n')
+	} else {
+		// Several lines: only when the closing delimiter comes before a blank
+		// line. Otherwise the lines stay Markdown (images and inline math in
+		// them are found), as with an unclosed $$ written by mistake.
+		if !closesBeforeBlank(reader.Source(), seg.Stop, close) {
+			return nil, parser.NoChildren
+		}
+		if len(rest) > 0 {
+			node.Expr = append(node.Expr, rest...)
+			node.Expr = append(node.Expr, '\n')
+		}
 	}
 	reader.AdvanceToEOL()
 	return node, parser.NoChildren
+}
+
+// closesBeforeBlank reports whether a line ending with close comes after
+// offset from and before a blank line (quote marks and spaces count as blank).
+func closesBeforeBlank(src []byte, from int, close []byte) bool {
+	for n := 0; from < len(src) && n < 1000; n++ {
+		end := bytes.IndexByte(src[from:], '\n')
+		if end < 0 {
+			end = len(src) - from
+		}
+		l := bytes.TrimSpace(bytes.TrimLeft(src[from:from+end], " \t>"))
+		if len(l) == 0 {
+			return false
+		}
+		if bytes.HasSuffix(l, close) {
+			return true
+		}
+		from += end + 1
+	}
+	return false
 }
 
 func (mathBlockParser) Continue(node ast.Node, reader text.Reader, pc parser.Context) parser.State {
@@ -137,8 +165,8 @@ func (mathBlockParser) Close(node ast.Node, reader text.Reader, pc parser.Contex
 	}
 }
 
-func (mathBlockParser) CanInterruptParagraph() bool { return true }
-func (mathBlockParser) CanAcceptIndentedLine() bool { return false }
+func (p mathBlockParser) CanInterruptParagraph() bool { return p.interrupt }
+func (mathBlockParser) CanAcceptIndentedLine() bool   { return false }
 
 type mathInlineParser struct{}
 
@@ -146,7 +174,8 @@ func (mathInlineParser) Trigger() []byte { return []byte{'$'} }
 
 // Parse follows the usual rules (pandoc, GitHub): the opening $ is not
 // followed by a space, the closing $ is not preceded by a space nor followed
-// by a digit, so "$5 and $10" stays text.
+// by a digit, so "$5 and $10" stays text. In addition, the closing $ is not
+// followed by a letter, so shell variables like $HOME/bin:$PATH stay text.
 func (mathInlineParser) Parse(parent ast.Node, block text.Reader, pc parser.Context) ast.Node {
 	line, seg := block.PeekLine()
 	if len(line) < 2 || line[0] != '$' {
@@ -180,7 +209,9 @@ func (mathInlineParser) Parse(parent ast.Node, block text.Reader, pc parser.Cont
 			continue
 		}
 		end := i + delim
-		if delim == 1 && end < len(body) && body[end] >= '0' && body[end] <= '9' {
+		// Not followed by a letter or digit: "$HOME/bin:$PATH" stays text.
+		// (pandoc only rules out a digit; a letter is stricter.)
+		if end < len(body) && isAlnum(body[end]) {
 			continue
 		}
 		block.Advance(delim + end)
@@ -188,4 +219,8 @@ func (mathInlineParser) Parse(parent ast.Node, block text.Reader, pc parser.Cont
 			Start: seg.Start, Stop: seg.Start + delim + end}
 	}
 	return nil
+}
+
+func isAlnum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }

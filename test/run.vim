@@ -19,6 +19,28 @@ function! Src(lines) abort
   return bufnr('%')
 endfunction
 
+" The property types s:init() would add (it needs +image and goda.vim).
+for s:t in ['mdview_anchor', 'mdview_anchor_end', 'mdview_text', 'mdview_error',
+      \ 'mdview_pending', 'mdview_math', 'mdview_heading']
+  if empty(prop_type_get(s:t))
+    call prop_type_add(s:t, {})
+  endif
+endfor
+
+" A source buffer and a viewer for it, with the state mdview#open() makes.
+function! Viewer(lines) abort
+  let src = Src(a:lines)
+  new
+  setlocal buftype=nofile
+  let viewer = bufnr('%')
+  call setline(1, a:lines)
+  let b:mdview_source = src
+  wincmd p
+  call setbufvar(src, 'mdview', #{viewer: viewer, results: [], map: range(1, len(a:lines)),
+        \ rmap: range(1, len(a:lines)), gen: 0, tick: -1, here: 0, bufhidden: '', req_id: 1})
+  return [src, viewer]
+endfunction
+
 let s:failed = 0
 let s:out = []
 for s:file in glob(s:dir . '/test_*.vim', 0, 1)
