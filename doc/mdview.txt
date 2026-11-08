@@ -56,7 +56,7 @@ Markdown のファイルは、普段どおりのエディタで開きます。md
 インライン数式などのテキストの表示とスクロールの追従は同じように働きます
 （|g:mdview_images|）。
 
-描画は goda.vim のプラグインとして動く Go のプログラム（bin/mdview）が行います。
+描画は goda.vim のプラグインとして動く Go のプログラム（|g:mdview_bin|）が行います。
 
 表						*mdview-tables*
 GFM の表は、罫線（┌─┬┐ │ ├┼┤ └┴┘）で囲んだテキストにします。列は表示上の
@@ -144,15 +144,16 @@ mdview と goda.vim の 2 つを Vim のプラグインとして入れます。m
 	git clone https://github.com/lea-151107/mdview
 	git clone https://github.com/Shougo/goda.vim
 <
-プラグインマネージャーで入れるときは、更新のあとに mdview のディレクトリで
-次を実行するように設定します（vim-plug なら "do"、goda-pm.vim・dpp.vim なら
-"installerBuild"）。 >
+Vim を起動して |:MdviewBuild| を実行し、Go のプログラムをビルドします。
+プラグインマネージャーで入れるときは、入れたあと・更新したあとに
+goda_mdview#build() を呼ぶように設定します。 >
 
-	cd go && go build -o ../bin/mdview .
+	" vim-plug
+	Plug 'lea-151107/mdview', { 'do': { -> goda_mdview#build() } }
+<	# goda-pm.vim・dpp.vim の TOML >
+	hook_post_update = 'call goda_mdview#build()'
 <
-手で入れたときは、Vim を起動して |:MdviewBuild| を実行します（mdview/go で
-go build し、mdview/bin/mdview を作ります）。mdview を更新したときも、
-ビルドし直します。
+mdview や goda.vim を更新したときも、ビルドし直します。
 
 キーに割り当てる例: >
 
@@ -194,11 +195,15 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 	保存せずに描き直します。ソースでもビューアでも使えます。
 
 :MdviewBuild					*:MdviewBuild*
-	bin/mdview をビルドします。動いているバイナリは止め、次の描画で
-	新しいものを起動します。関数では goda_mdview#build() です（goda.vim
-	の名前の決まりに合わせたもので、プラグインマネージャーのフックから
-	呼べます）。バイナリと Vim script の版が合わないとき、goda.vim は
-	これを呼ぶように表示します。
+	Go のプログラムを |g:mdview_bin| にビルドします。goda.vim の
+	goda#build() を使うので、ビルドが終わるまで Vim は待ちます。
+	goda-pm.vim を使っているときは、入れた goda.vim の Go 側でビルドし、
+	バイナリの隣に go.work を作ります（|g:goda#workspace|）。動いている
+	バイナリは止め、次の描画で新しいものを起動します。ビルドが失敗した
+	ときは、古いバイナリをそのまま使います。
+	関数では goda_mdview#build() です（goda.vim の名前の決まりに合わせた
+	もので、プラグインマネージャーのフックから呼べます）。バイナリと
+	Vim script の版が合わないとき、goda.vim はこれを呼ぶように表示します。
 
 :MdviewLog					*:MdviewLog*
 	Go 側のログ（goda#log('mdview')）を表示します。
@@ -280,8 +285,12 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 	画像が見えていないとき、画像の位置が変わらない描き直しのときは
 	行いません。
 
-*g:mdview_bin*			(既定: mdview/bin/mdview)
-	Go のバイナリのパス。
+*g:mdview_bin*			(既定: $XDG_CACHE_HOME/vim/mdview/mdview か
+				 ~/.cache/vim/mdview/mdview)
+	Go のバイナリのパス。|:MdviewBuild| はここに作ります。マシンごとの
+	ものなので、プラグインの中ではなくキャッシュに置きます。
+	|g:mdview_cache_dir| と同じ場所にはしないでください（古い画像と一緒
+	に消されます）。
 
 *g:mdview_cache_dir*		(既定: $XDG_CACHE_HOME/mdview か ~/.cache/mdview)
 	描いた画像（raw RGB）を置くディレクトリ。

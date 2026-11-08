@@ -31,8 +31,13 @@ Vim の画像表示機能（`+image` の popup image）を使い、mermaid・デ
 
 ## 導入
 
-mdview と goda.vim の 2 つを Vim のプラグインとして入れ、mdview の Go のプログラム（`bin/mdview`）を
-ビルドします。dal と dam は、ビルドのときに Go が取ってきます。
+mdview と goda.vim の 2 つを Vim のプラグインとして入れ、mdview の Go のプログラムをビルドします。
+dal と dam は、ビルドのときに Go が取ってきます。
+
+ビルドは `:MdviewBuild`（関数では `goda_mdview#build()`）で行います。goda.vim の `goda#build()` を使い、
+goda-cmp.vim などと同じく、バイナリはプラグインの外の `~/.cache/vim/mdview/mdview` に作ります
+（`$XDG_CACHE_HOME` があれば `$XDG_CACHE_HOME/vim/mdview/mdview`。`g:mdview_bin` で変えられます）。
+ビルドが終わるまで Vim は待ちます。初めてのビルドは、モジュールを取ってくるので時間がかかります。
 
 ### Vim のパッケージで入れる
 
@@ -50,17 +55,14 @@ Vim を起動して、次を実行します。
 :helptags ALL
 ```
 
-`:MdviewBuild` は `mdview/go` で `go build` し、`mdview/bin/mdview` を作ります。
-シェルから `cd mdview/go && go build -o ../bin/mdview .` を実行しても同じです。
-
 ### vim-plug で入れる
 
 ```vim
 Plug 'Shougo/goda.vim'
-Plug 'lea-151107/mdview', { 'do': 'cd go && go build -o ../bin/mdview .' }
+Plug 'lea-151107/mdview', { 'do': { -> goda_mdview#build() } }
 ```
 
-`:PlugInstall` と `:PlugUpdate` のあとに、mdview のディレクトリでビルドします。
+`:PlugInstall` と `:PlugUpdate` のあとにビルドします。
 
 ### goda-pm.vim・dpp.vim で入れる
 
@@ -70,11 +72,11 @@ repo = 'Shougo/goda.vim'
 
 [[plugins]]
 repo = 'lea-151107/mdview'
-extAttrs.installerBuild = 'cd go && go build -o ../bin/mdview .'
+hook_post_update = 'call goda_mdview#build()'
 ```
 
-ビルドは、goda.vim の名前の決まりに合わせた `goda_mdview#build()` でもできます（`:MdviewBuild` と同じ）。
-`installerBuild` の代わりに `hook_post_update = 'call goda_mdview#build()'` と書くこともできます。
+goda-pm.vim では、入れた goda.vim の Go 側でビルドします（`g:goda#workspace`）。goda.vim を更新しても、
+mdview の Go 側が古い goda.vim のままになりません。
 
 ### ほかの方法で入れる
 
@@ -88,9 +90,11 @@ set runtimepath+=/path/to/mdview
 
 ### 更新したとき
 
-mdview を更新したら、ビルドし直します（上の vim-plug・goda-pm.vim の設定では自動で行います）。
+mdview や goda.vim を更新したら、ビルドし直します（上の vim-plug・goda-pm.vim の設定では自動で行います）。
 Go のプログラムと Vim script の版が合わないときは、goda.vim が
 「build the binary again (call goda_mdview#build())」と表示するので、`:MdviewBuild` を実行してください。
+
+以前の版は、バイナリを mdview の中の `bin/mdview` に作っていました。今は使わないので、消してかまいません。
 
 詳しくは `:help mdview` を見てください。
 
@@ -104,6 +108,10 @@ git clone https://github.com/lea-151107/dal
 git clone https://github.com/lea-151107/dam
 go work init ./mdview/go ./dal ./dam
 ```
+
+`:MdviewBuild` もこの `go.work` でビルドします。ただし goda-pm.vim を使っていると、goda-pm.vim のプラグイン
+（`g:goda#workspace`）でビルドするので、この `go.work` は使いません。そのときは dal と dam を goda-pm.vim の
+`local` のプラグインとして入れます。
 
 dal や dam を公開し直したら、`cd go && go get github.com/lea-151107/dal@vX.Y.Z` で
 `go/go.mod` のバージョンを上げます。
@@ -122,8 +130,8 @@ testdata/             確認用の Markdown
 ## テスト
 
 ```sh
-make check   # gofmt・go vet・staticcheck・Go のテスト・Vim script のテスト
-make build   # bin/mdview
+make check   # gofmt・go mod tidy の差分・go vet・staticcheck・Go のテスト・Vim script のテスト
+make build   # bin/mdview（開発用。Vim で使うには g:mdview_bin で指す）
 echo '{"method":"goda.plugins"}' | ./bin/mdview --transport=jsonl
 ```
 

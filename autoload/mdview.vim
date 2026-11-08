@@ -27,8 +27,22 @@ let s:resize_timer = 0
 let s:syncing = 0     " moving one of source and viewer to follow the other
 let s:clear_timer = 0
 
+" The binary: machine specific, so it is not built into the plugin (which a
+" plugin manager may share or keep read only) but into a cache directory, as
+" goda.vim's other plugins do (goda-cmp.vim, goda-fi.vim). Not into
+" s:cache_dir(): the images there are pruned and cleared.
 function! s:bin() abort
-  return expand(get(g:, 'mdview_bin', s:root . '/bin/mdview'))
+  if exists('g:mdview_bin')
+    return expand(g:mdview_bin)
+  endif
+  if !empty($XDG_CACHE_HOME)
+    let base = $XDG_CACHE_HOME . '/vim'
+  elseif has('win32') && !empty($LOCALAPPDATA)
+    let base = $LOCALAPPDATA . '/vim'
+  else
+    let base = expand('~/.cache/vim')
+  endif
+  return base . '/mdview/mdview' . (has('win32') ? '.exe' : '')
 endfunction
 
 function! s:cache_dir() abort
@@ -334,36 +348,37 @@ function! mdview#refresh(...) abort
   endtry
 endfunction
 
+" Build the binary with goda#build() of goda.vim: with the modules of the
+" plugins installed (g:goda#workspace, which goda-pm.vim sets), so that the
+" binary goes with the goda.vim installed. It waits for the build, stops the
+" binary running, and keeps it when the build fails.
 function! mdview#build() abort
   if !executable('go')
     call s:warn('go is not installed')
     return
   endif
-  let bin = s:bin()
-  let s:build_out = []
-  echomsg 'mdview: building ' . bin . ' ...'
-  let s:build_job = job_start(['go', 'build', '-o', bin, '.'], #{
-        \ cwd: s:root . '/go',
-        \ out_cb: {ch, msg -> add(s:build_out, msg)},
-        \ err_cb: {ch, msg -> add(s:build_out, msg)},
-        \ exit_cb: function('s:build_done', [bin]),
-        \ })
-endfunction
-
-function! s:build_done(bin, job, status) abort
-  if a:status != 0
+  if !s:has_goda()
+    call s:warn('goda.vim is not in ''runtimepath''')
+    return
+  endif
+  " (Loads goda.vim's autoload script once: exists() does not.)
+  call goda#is_running()
+  if !exists('*goda#build')
+    call s:warn('this goda.vim has no goda#build(): update goda.vim')
+    return
+  endif
+  echomsg 'mdview: building ' . s:bin() . ' ...'
+  redraw
+  try
+    call goda#build(#{name: 'mdview', dir: s:root . '/go', bin: s:bin()})
+  catch
     echohl ErrorMsg
-    echomsg 'mdview: build failed'
-    for l in s:build_out
+    for l in split(v:exception, "\n")
       echomsg l
     endfor
     echohl None
     return
-  endif
-  if s:has_goda() && goda#is_running('mdview')
-    call goda#stop('mdview')
-  endif
-  echomsg 'mdview: built ' . a:bin
+  endtry
   call s:refresh_all()
 endfunction
 
