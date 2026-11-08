@@ -9,7 +9,7 @@ function! Test_contract() abort
   call assert_equal([
         \ '# Title',
         \ '', '',
-        \ 'text x² and ![a](a.png) here', '', '',
+        \ 'text x² and [a] here', '', '',
         \ '┌────┬──────┐', '│    │ cell │', '│    │      │', '├────┼──────┤', '│ y  │    b │',
         \ '└────┴──────┘',
         \ '│', '│',
@@ -20,7 +20,7 @@ function! Test_contract() abort
         \ '│ ' . repeat('─', 78),
         \ ], v.lines)
   call assert_equal(['mdview_alert_tip', 'mdview_bold', 'mdview_code_border',
-        \ 'mdview_code_lang', 'mdview_error', 'mdview_heading',
+        \ 'mdview_code_lang', 'mdview_error', 'mdview_heading', 'mdview_image',
         \ 'mdview_math', 'mdview_quote', 'mdview_quote_bar', 'mdview_rule',
         \ 'mdview_table', 'mdview_table_border', 'mdview_table_header'],
         \ uniq(sort(map(copy(v.props), 'v:val[1]'))))
@@ -28,6 +28,7 @@ function! Test_contract() abort
   " borders), the one in a quote.
   call assert_equal([[2, 3, 0], [5, 6, 0], [8, 9, 2], [13, 14, 2]],
         \ map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
-  " The code of the broken mermaid and of the go block, for their syntax.
-  call assert_equal([[16, 17, 'mermaid'], [23, 23, 'go']], map(copy(v.code), 'v:val[:2]'))
+  " The syntax regions: the paragraphs (none), the code of the broken
+  " mermaid and of the go block.
+  call assert_equal([[4, 4, '-'], [16, 17, 'mermaid'], [21, 21, '-'], [23, 23, 'go']], map(copy(v.code), 'v:val[:2]'))
 endfunction

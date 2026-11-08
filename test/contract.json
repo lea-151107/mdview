@@ -57,6 +57,40 @@
       "closed": true
     },
     {
+      "kind": "para",
+      "start": 6,
+      "end": 6,
+      "col": 0,
+      "col_end": 0,
+      "spans": [
+        [
+          "text ",
+          "",
+          6
+        ],
+        [
+          "x²",
+          "math",
+          6
+        ],
+        [
+          " and ",
+          "",
+          6
+        ],
+        [
+          "[a]",
+          "image",
+          6
+        ],
+        [
+          " here",
+          "",
+          6
+        ]
+      ]
+    },
+    {
       "kind": "inline_math",
       "start": 6,
       "end": 6,
@@ -70,7 +104,7 @@
       "kind": "image",
       "start": 6,
       "end": 6,
-      "key": "k4",
+      "key": "k5",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -130,7 +164,7 @@
       "kind": "image",
       "start": 7,
       "end": 7,
-      "key": "k6",
+      "key": "k7",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -156,10 +190,24 @@
       ]
     },
     {
+      "kind": "para",
+      "start": 10,
+      "end": 10,
+      "col": 2,
+      "col_end": 0,
+      "spans": [
+        [
+          "[a]",
+          "image",
+          10
+        ]
+      ]
+    },
+    {
       "kind": "image",
       "start": 10,
       "end": 10,
-      "key": "k8",
+      "key": "k10",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -204,6 +252,20 @@
       "alert": "tip"
     },
     {
+      "kind": "para",
+      "start": 15,
+      "end": 15,
+      "col": 2,
+      "col_end": 0,
+      "spans": [
+        [
+          "[!TIP]",
+          "",
+          15
+        ]
+      ]
+    },
+    {
       "kind": "quote",
       "start": 16,
       "end": 16,
@@ -211,6 +273,20 @@
       "col_end": 0,
       "marks": [
         4
+      ]
+    },
+    {
+      "kind": "para",
+      "start": 16,
+      "end": 16,
+      "col": 6,
+      "col_end": 0,
+      "spans": [
+        [
+          "t",
+          "",
+          16
+        ]
       ]
     },
     {

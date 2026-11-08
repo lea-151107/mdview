@@ -396,3 +396,77 @@ function! Test_build_view_rule() abort
   endtry
   call assert_equal(repeat('-', 10), v.lines[1])
 endfunction
+
+" s:add_para(): a paragraph's spans [text, style, line] laid out.
+function! s:para(start, end, col, spans) abort
+  return #{kind: 'para', start: a:start, end: a:end, col: a:col, spans: a:spans}
+endfunction
+
+" Joined and wrapped (no line starting with 。), styles as properties, each
+" source line mapped to the viewer line of its first character.
+function! Test_build_view_para() abort
+  let src = Src(['これは **太字** と', '続きの行です。', 'next'])
+  let r = s:para(1, 2, 0, [['これは ', '', 1], ['太字', 'b', 1], [' と', '', 1], ['続きの行です。', '', 2]])
+  let v = S('build_view')(src, [r], #{cellw: 8, cols: 14})
+  call assert_equal(['これは 太字 と', '続きの行です。', 'next'], v.lines)
+  call assert_equal([1, 2, 3], v.map)
+  call assert_equal([1, 2, 3], v.rmap)
+  call assert_equal([[1, 'mdview_bold', 6, 11]], v.props)
+  call assert_equal([[1, 2, '-', 1]], v.code)
+  " Narrower: 。 does not start a line; line 2's text starts on viewer line 2.
+  let v = S('build_view')(src, [r], #{cellw: 8, cols: 12})
+  call assert_equal(['これは 太字', 'と続きの行で', 'す。', 'next'], v.lines)
+  call assert_equal([1, 2, 4], v.map)
+  call assert_equal([1, 1, 2, 3], v.rmap)
+endfunction
+
+" In a list in a quote: the marks on the first line, spaces and the bar on
+" the others, the text dimmed; a hard break; two paragraphs, one region.
+function! Test_build_view_para_in_quote_and_list() abort
+  let src = Src(['> - aaa bbb ccc', '>   ddd', '', '> x'])
+  let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 4, marks: [0, 0, -1, 0]},
+        \ s:para(1, 2, 4, [['aaa bbb ccc ', '', 1], ["\n", '', 1], ['ddd', '', 2]]),
+        \ s:para(4, 4, 2, [['x', '', 4]])], #{cellw: 8, cols: 14})
+  call assert_equal(['│ - aaa bbb', '│   ccc', '│   ddd', '', '│ x'], v.lines)
+  call assert_equal([1, 3, 4, 5], v.map)
+  call assert_equal([[1, 'mdview_quote_bar', 3, 1], [1, 'mdview_quote', 7, 7],
+        \ [2, 'mdview_quote_bar', 3, 1], [2, 'mdview_quote', 3, 7]], v.props[:3])
+  call assert_equal([[1, 5, '-', 1]], v.code)
+endfunction
+
+" An image in text goes below its whole paragraph; an alert's title line
+" stays a title.
+function! Test_build_view_para_image_and_alert() abort
+  let src = Src(['a', 'b ![p](p.png) c', '', '> [!NOTE]', '> d'])
+  let img = #{kind: 'image', start: 2, end: 2, keep: 1, key: 'k', path: '/p', w: 8, h: 16, rows: 1}
+  let v = S('build_view')(src, [s:para(1, 2, 0, [['a ', '', 1], ['b ', '', 2], ['[p]', 'image', 2], [' c', '', 2]]),
+        \ img, #{kind: 'quote', start: 4, end: 5, marks: [0, 0], alert: 'note'},
+        \ s:para(4, 5, 2, [['[!NOTE] ', '', 4], ['d', '', 5]])], #{cellw: 8, cols: 20})
+  call assert_equal(['a b [p] c', '', '', '│ 📝 Note', '│ d'], v.lines)
+  call assert_equal([[2, 2, 0]], map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
+  call assert_equal([1, 1, 3, 4, 5], v.map)
+endfunction
+
+" An image alone on a line inside a paragraph replaces that line: the
+" paragraph is shown line by line, as before.
+function! Test_build_view_para_with_image_line() abort
+  let src = Src(['a', '![p](p.png)', 'c'])
+  let img = #{kind: 'image', start: 2, end: 2, key: 'k', path: '/p', w: 8, h: 16, rows: 1}
+  let v = S('build_view')(src, [s:para(1, 3, 0, [['a ', '', 1], ['[p] ', 'image', 2], ['c', '', 3]]), img])
+  call assert_equal(['a', '', 'c'], v.lines)
+  call assert_equal([], v.code)
+endfunction
+
+" A paragraph's region has no syntax: markdown does not conceal its text.
+function! Test_code_syntax_plain() abort
+  syntax enable
+  try
+    call Src(['*x*'])
+    setlocal filetype=markdown
+    call S('code_syntax_here')([[1, 1, '-', 1]], 0)
+    call assert_equal('mdviewPlain', synIDattr(synID(1, 1, 1), 'name'))
+    call assert_equal('mdviewPlain', synIDattr(synID(1, 2, 1), 'name'))
+  finally
+    syntax off
+  endtry
+endfunction

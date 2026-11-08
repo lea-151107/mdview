@@ -126,12 +126,12 @@ func TestRunProgressive(t *testing.T) {
 	}
 }
 
-// withoutCode drops the code results (each fence has one besides its
-// drawing).
+// withoutCode drops the code and paragraph results (each fence has a code
+// one besides its drawing, each image in text a paragraph).
 func withoutCode(rs []result) []result {
 	var out []result
 	for _, r := range rs {
-		if r.Kind != "code" {
+		if r.Kind != "code" && r.Kind != "para" {
 			out = append(out, r)
 		}
 	}
@@ -163,7 +163,7 @@ func TestRunNoImages(t *testing.T) {
 	for _, r := range got {
 		kinds = append(kinds, r.Kind)
 	}
-	if calls != 1 || strings.Join(kinds, ",") != "heading,code,inline_math,table" {
+	if calls != 1 || strings.Join(kinds, ",") != "heading,code,para,inline_math,table" {
 		t.Fatalf("calls %d, kinds %v", calls, kinds)
 	}
 }

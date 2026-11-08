@@ -20,6 +20,14 @@ Markdown の書式、mermaid、数式、画像をまとめて確認するため�
 - リンク: [mdview のヘルプ](doc/mdview.txt) と <https://example.com>
 - インライン数式（1 行のテキストにする）: $E = mc^2$ と $\alpha + \beta$ と $\frac{a+b}{c}$
 
+段落の中の改行は
+つなげて、ビューアの幅で折り返します。日本語の文字どうしは
+空白を入れずに、English words
+are joined with a space.
+行末の空白 2 つで改行します。  
+行末の \ でも改行します。\
+タグの<br>でも改行します。
+
 ## 2. 見出し
 
 ### 見出し 3

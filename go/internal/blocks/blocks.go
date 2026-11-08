@@ -33,6 +33,7 @@ const (
 	Quote      Kind = "quote"       // a blockquote, its '>' drawn as bars by Vim
 	Code       Kind = "code"        // a fenced code block, framed by Vim
 	Rule       Kind = "rule"        // a thematic break, drawn as a line by Vim
+	Para       Kind = "para"        // a paragraph, laid out by Vim from Block.Spans
 )
 
 // Block is one part of the document. Start and End are 1-based line
@@ -55,6 +56,10 @@ const (
 // 0-based byte column where each line's text starts after its quote or
 // list marks (the fence, the code), or -1. A mermaid or math fence is both
 // its Mermaid or Math block and a Code block, shown when it is not drawn.
+//
+// For Para, Start..End are the paragraph's lines (or a list item's text),
+// Col the 0-based byte column where its text starts on Start (after quote
+// or list marks), and Spans its text without Markdown marks.
 //
 // For Rule, Start == End is the line, and Col the 0-based byte column of
 // its first mark (after its quote or list marks).
@@ -80,6 +85,7 @@ type Block struct {
 	Lang   string     // Code: the first word of the info string, as written
 	Cols   []int      // Code: column of the text of each line, or -1
 	Closed bool       // Code: End is the closing fence
+	Spans  []Span     // Para: its text
 }
 
 // CellPos is where an image in a table is: the row (0 is the header) and
@@ -175,6 +181,10 @@ func Parse(lines []string) []Block {
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
 			out = append(out, d.htmlImages(n.Segments, false, text.Segment{}, n)...)
+		case *ast.Paragraph, *ast.TextBlock:
+			if blk, ok := d.para(n); ok {
+				out = append(out, blk)
+			}
 		case *ast.ThematicBreak:
 			if pos := n.Pos(); pos >= 0 && pos < len(d.src) && strings.IndexByte("-*_", d.src[pos]) >= 0 {
 				l := d.line(pos)
@@ -515,4 +525,15 @@ func altText(n ast.Node, src []byte) []byte {
 		}
 	}
 	return b
+}
+
+// para returns the Para block of a paragraph or a list item's text.
+func (d *doc) para(n ast.Node) (Block, bool) {
+	ls := n.Lines()
+	if ls.Len() == 0 {
+		return Block{}, false
+	}
+	first, last := ls.At(0), ls.At(ls.Len()-1)
+	return Block{Kind: Para, Start: d.line(first.Start), End: d.line(max(last.Start, last.Stop-1)),
+		Col: d.col(first.Start), Spans: d.spans(n, true)}, true
 }

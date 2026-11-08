@@ -14,7 +14,7 @@
 
 let s:root = expand('<sfile>:p:h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 6
+let s:script_version = 7
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -448,8 +448,15 @@ function! s:build_view(src, results, ...) abort
   let quotes = {}     " source line -> [[col of '>' or -1, alert, title line]], outer first
   let codes = {}      " source line -> its code block's result
   let rules = {}      " source line -> column of a thematic break
+  let paras = {}      " first source line -> a paragraph's result
+  let para_of = {}    " source line -> the paragraph it is in
   for r in a:results
-    if r.kind ==# 'rule'
+    if r.kind ==# 'para'
+      let paras[r.start] = r
+      for l in range(r.start, r.end)
+        let para_of[l] = r
+      endfor
+    elseif r.kind ==# 'rule'
       let rules[r.start] = r.col
     elseif r.kind ==# 'code'
       for l in range(r.start, r.end)
@@ -488,25 +495,36 @@ function! s:build_view(src, results, ...) abort
         " table).
         call add(groups[-1].items, has_key(r, 'cell') ? r
               \ : extend(copy(r), #{indent: get(groups[-1].table, 'indent', 0)}))
-      elseif !empty(groups) && groups[-1].start == r.start && groups[-1].end == r.end
+        continue
+        continue
+      endif
+      " An image in text goes below its paragraph (laid out as a whole).
+      let [gs, ge] = [r.start, r.end]
+      if get(r, 'keep', 0) && has_key(para_of, r.start)
+        let p = para_of[r.start]
+        if empty(groups) || p.start > groups[-1].end
+              \ || (groups[-1].start == p.start && groups[-1].end == p.end)
+          let [gs, ge] = [p.start, p.end]
+        endif
+      endif
+      if !empty(groups) && groups[-1].start == gs && groups[-1].end == ge
             \ && groups[-1].keep == get(r, 'keep', 0)
         call add(groups[-1].items, r)
-      elseif empty(groups) || r.start > groups[-1].end
-        call add(groups, #{start: r.start, end: r.end, keep: get(r, 'keep', 0), items: [r]})
+      elseif empty(groups) || gs > groups[-1].end
+        call add(groups, #{start: gs, end: ge, keep: get(r, 'keep', 0), items: [r]})
       endif
     endif
   endfor
 
-  " code: the syntax regions of code blocks, [[first, last, syntax, start]].
+  " code: the syntax regions of code blocks and paragraphs, [[first, last,
+  " syntax, start]] ('-': none, for a paragraph).
   let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: [], code: []}
   let cx = #{headings: headings, inline: inline, quotes: quotes, codes: codes, rules: rules,
+        \ paras: paras,
         \ cols: opts.cols, ts: getbufvar(a:src, '&tabstop', 8)}
   let i = 1
   for g in groups
-    while i < g.start && i <= n
-      call s:copy_line(v, src_lines, i, cx)
-      let i += 1
-    endwhile
+    call s:copy_lines(v, src_lines, i, min([g.start - 1, n]), cx)
     let failed = filter(copy(g.items), {_, r -> empty(get(r, 'path', '')) && empty(get(r, 'text', []))})
     let first_line = src_lines[g.start - 1]
     " Rows that replace the lines (images, a table, messages) keep the
@@ -522,9 +540,7 @@ function! s:build_view(src, results, ...) abort
       endfor
       call s:add_table(v, g.table, first_line, opts, cell_images, quote)
     elseif g.keep || !empty(failed)
-      for k in range(g.start, g.end)
-        call s:copy_line(v, src_lines, k, cx)
-      endfor
+      call s:copy_lines(v, src_lines, g.start, g.end, cx)
     else
       call extend(v.map, repeat([len(v.lines) + 1], g.end - g.start + 1))
     endif
@@ -552,11 +568,113 @@ function! s:build_view(src, results, ...) abort
     endfor
     let i = g.end + 1
   endfor
-  while i <= n
-    call s:copy_line(v, src_lines, i, cx)
-    let i += 1
-  endwhile
+  call s:copy_lines(v, src_lines, i, n, cx)
   return v
+endfunction
+
+" Copy source lines from..to: each paragraph that starts and ends in them as
+" a whole (s:add_para()), the other lines one by one.
+function! s:copy_lines(v, src_lines, from, to, cx) abort
+  let i = a:from
+  while i <= a:to
+    let p = get(a:cx.paras, i, {})
+    if !empty(p) && p.end <= a:to
+      call s:add_para(a:v, a:src_lines, p, a:cx)
+      let i = p.end + 1
+    else
+      call s:copy_line(a:v, a:src_lines, i, a:cx)
+      let i += 1
+    endif
+  endwhile
+endfunction
+
+" A paragraph (r: its result): its text without Markdown marks (styles as
+" properties), its lines joined and wrapped to the viewer, after its quote
+" or list marks on the first line and the same width of spaces (and the
+" quote's bars) on the others. Each source line maps to the viewer line of
+" its first character.
+function! s:add_para(v, src_lines, r, cx) abort
+  let spans = a:r.spans
+  let start = a:r.start
+  let marks = get(a:cx.quotes, start, [])
+  let first = a:src_lines[start - 1]
+  let [pre, pprops, qend] = s:quote_prefix(first, marks, 0)
+  let pre .= strpart(first, qend, a:r.col - qend)
+  let [cpre, cprops, _] = s:quote_prefix(first, marks, 1)
+  let cpre .= repeat(' ', max([0, s:display_indent(first, a:r.col) - strdisplaywidth(cpre)]))
+  if !empty(marks) && marks[-1][2]
+    " The first line of an alert: its title, then the rest.
+    call s:copy_line(a:v, a:src_lines, start, a:cx)
+    let start += 1
+    if start > a:r.end
+      return
+    endif
+    let spans = filter(copy(spans), {_, s -> s[2] >= start})
+    let [pre, pprops] = [cpre, cprops]
+  endif
+  " The text of a plain quote is dimmed.
+  let dim = !empty(marks) && empty(marks[-1][1])
+  let width = max([10, a:cx.cols - strdisplaywidth(cpre)])
+  let rows = []
+  for l in s:cell_lines(spans)
+    call extend(rows, s:wrap_chars(l, width))
+  endfor
+  let first_vl = len(a:v.lines) + 1
+  let seen = {}   " source line -> the viewer line of its first character
+  let srcl = start
+  for k in range(len(rows))
+    let [p, pp] = k == 0 ? [pre, pprops] : [cpre, cprops]
+    let [text, props] = s:styled_chars(rows[k], len(p))
+    if !empty(rows[k])
+      let srcl = rows[k][0][3]
+    endif
+    for c in rows[k]
+      if !has_key(seen, c[3])
+        let seen[c[3]] = len(a:v.lines) + 1
+      endif
+    endfor
+    if dim && !empty(text)
+      call add(props, [len(p) + 1, 'mdview_quote', len(text)])
+    endif
+    call s:add_line(a:v, p . text, srcl, pp + props)
+  endfor
+  let vl = first_vl
+  for l in range(start, a:r.end)
+    let vl = get(seen, l, vl)
+    call add(a:v.map, vl)
+  endfor
+  " No markdown syntax on the text (an unescaped *x* would be concealed as
+  " italic): a region of its own, joined with the previous paragraph's
+  " across blank lines.
+  let last = len(a:v.lines)
+  if !empty(a:v.code) && a:v.code[-1][2] ==# '-'
+        \ && empty(filter(a:v.lines[a:v.code[-1][1] : first_vl - 2], '!empty(v:val)'))
+    let a:v.code[-1][1] = last
+  else
+    call add(a:v.code, [first_vl, last, '-', a:r.start])
+  endif
+endfunction
+
+" The text of chars (from s:cell_lines()) and the properties of their
+" styles: [text, props], props at columns after offset bytes.
+function! s:styled_chars(chars, offset) abort
+  let text = ''
+  let props = []
+  let run = ''
+  let run_start = 0
+  for c in a:chars + [['', "\x01", 0]]
+    if c[1] !=# run
+      for st in split(run, ',')
+        if has_key(s:table_styles, st) && len(text) > run_start
+          call add(props, [a:offset + run_start + 1, s:table_styles[st], len(text) - run_start])
+        endif
+      endfor
+      let run = c[1]
+      let run_start = len(text)
+    endif
+    let text .= c[0]
+  endfor
+  return [text, props]
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -778,8 +896,8 @@ function! s:code_syntax_here(regions, reset) abort
   endfor
   let groups = {}
   for [first, last, name; _] in a:regions
-    let cluster = s:include_syntax(name)
-    let group = empty(cluster) ? 'mdviewCodePlain' : 'mdviewCode_' . name
+    let cluster = name ==# '-' ? '' : s:include_syntax(name)
+    let group = name ==# '-' ? 'mdviewPlain' : empty(cluster) ? 'mdviewCodePlain' : 'mdviewCode_' . name
     execute printf('syntax region %s start=/\%%%dl^/ end=/\%%%dl$/ keepend%s',
           \ group, first, last, empty(cluster) ? '' : ' contains=@' . cluster)
     let groups[group] = 1
@@ -870,7 +988,10 @@ function! s:cell_lines(runs, ...) abort
   let cellw = a:0 > 1 ? a:2 : 8
   let lines = [[]]
   let nth = 0
-  for [text, style] in a:runs
+  for run in a:runs
+    " (A paragraph's runs have the source line too: chars get it.)
+    let [text, style] = run[0 : 1]
+    let line = get(run, 2, 0)
     if text ==# "\n"
       call add(lines, [])
       continue
@@ -886,7 +1007,7 @@ function! s:cell_lines(runs, ...) abort
       endif
     endif
     for c in split(substitute(text, '[\t\r\n]', ' ', 'g'), '\zs')
-      call add(lines[-1], [c, style, strdisplaywidth(c)])
+      call add(lines[-1], [c, style, strdisplaywidth(c), line])
     endfor
   endfor
   if empty(images)

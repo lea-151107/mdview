@@ -290,15 +290,23 @@ func TestTable(t *testing.T) {
 		Align: []string{"l", "c", "r"},
 		Lines: []int{3, 5, 6, 7},
 		Rows: [][][]Span{
-			{{{"左", ""}}, {{"中", ""}}, {{"右", ""}}},
-			{{{"b", "b"}, {" ", ""}, {"i", "i"}, {" ", ""}, {"bi", "b,i"}},
-				{{"c", "code"}, {" ", ""}, {"s", "strike"}, {" ", ""}, {"u", "u"}},
-				{{"a|b & *", ""}}},
-			{{{"x", ""}, {"\n", ""}, {"y", ""}},
-				{{"l", "link"}, {" ", ""}, {"https://x.y", "link"}},
-				{{"[alt]", "image"}, {" ", ""}, {"x^2", "math"}}},
-			{{{"only", ""}}, {}, {}},
+			{{{"左", "", 0}}, {{"中", "", 0}}, {{"右", "", 0}}},
+			{{{"b", "b", 0}, {" ", "", 0}, {"i", "i", 0}, {" ", "", 0}, {"bi", "b,i", 0}},
+				{{"c", "code", 0}, {" ", "", 0}, {"s", "strike", 0}, {" ", "", 0}, {"u", "u", 0}},
+				{{"a|b & *", "", 0}}},
+			{{{"x", "", 0}, {"\n", "", 0}, {"y", "", 0}},
+				{{"l", "link", 0}, {" ", "", 0}, {"https://x.y", "link", 0}},
+				{{"[alt]", "image", 0}, {" ", "", 0}, {"x^2", "math", 0}}},
+			{{{"only", "", 0}}, {}, {}},
 		},
+	}
+	// (The spans' lines are checked in TestPara.)
+	for _, row := range tb.Table.Rows {
+		for _, cell := range row {
+			for k := range cell {
+				cell[k].Line = 0
+			}
+		}
 	}
 	if !reflect.DeepEqual(tb.Table, want) {
 		t.Fatalf("got\n%#v\nwant\n%#v", tb.Table, want)
@@ -464,6 +472,43 @@ func TestRule(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got, c.want) {
 				t.Fatalf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestPara(t *testing.T) {
+	type p struct {
+		Start, End, Col int
+		Spans           []Span
+	}
+	cases := []struct {
+		name string
+		doc  string
+		want []p
+	}{
+		{"marks", "これは **太字** と <u>下線</u> と [リンク](http://x) `c` \\*x\\*",
+			[]p{{1, 1, 0, []Span{{"これは ", "", 1}, {"太字", "b", 1}, {" と ", "", 1}, {"下線", "u", 1},
+				{" と ", "", 1}, {"リンク", "link", 1}, {" ", "", 1}, {"c", "code", 1}, {" *x*", "", 1}}}}},
+		{"soft breaks", "日本語の\n続きと\nEnglish\nwords",
+			[]p{{1, 4, 0, []Span{{"日本語の", "", 1}, {"続きと ", "", 2}, {"English ", "", 3}, {"words", "", 4}}}}},
+		{"hard breaks", "a  \nb\\\nc<br>d",
+			[]p{{1, 3, 0, []Span{{"a", "", 1}, {"\n", "", 1}, {"b", "", 2}, {"\n", "", 2}, {"c", "", 3},
+				{"\n", "", 3}, {"d", "", 3}}}}},
+		{"in a quote", "> a\n> b", []p{{1, 2, 2, []Span{{"a ", "", 1}, {"b", "", 2}}}}},
+		{"tight list", "- x\n- [ ] y\n- [x] z", []p{{1, 1, 2, []Span{{"x", "", 1}}},
+			{2, 2, 2, []Span{{"[ ] y", "", 2}}}, {3, 3, 2, []Span{{"[x] z", "", 3}}}}},
+		{"two paragraphs", "a\n\nb", []p{{1, 1, 0, []Span{{"a", "", 1}}}, {3, 3, 0, []Span{{"b", "", 3}}}}},
+		{"not a heading or code", "# h\n\n```\nx\n```", nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got []p
+			for _, b := range ofKind(Parse(strings.Split(c.doc, "\n")), Para) {
+				got = append(got, p{b.Start, b.End, b.Col, b.Spans})
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got\n%#v\nwant\n%#v", got, c.want)
 			}
 		})
 	}

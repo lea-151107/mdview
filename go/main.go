@@ -32,7 +32,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 6
+const scriptVersion = 7
 
 const blockTimeout = 15 * time.Second
 
@@ -150,6 +150,8 @@ type result struct {
 	Lang   string `json:"lang,omitempty"`
 	Cols   []int  `json:"cols,omitempty"`
 	Closed bool   `json:"closed,omitempty"`
+	// Spans: a paragraph's text, [text, style, source line] each.
+	Spans [][]any `json:"spans,omitempty"`
 }
 
 // tableResult is a table for Vim: rows[row][column] is a list of
@@ -162,6 +164,20 @@ type tableResult struct {
 }
 
 // tableOf converts a table, with its inline math as text when inlineMath.
+// spanText returns the text of a span: a formula as one line of text (with
+// inlineMath) or as its source in $…$.
+func spanText(sp blocks.Span, inlineMath bool) string {
+	if !strings.Contains(sp.Style, "math") {
+		return sp.Text
+	}
+	if inlineMath {
+		if t, err := dal.RenderLine(sp.Text, dal.LineOptions{}); err == nil && t != "" {
+			return t
+		}
+	}
+	return "$" + sp.Text + "$"
+}
+
 func tableOf(t *blocks.TableData, inlineMath bool) *tableResult {
 	out := &tableResult{Align: t.Align, Lines: t.Lines, Rows: make([][][][2]string, len(t.Rows))}
 	for i, row := range t.Rows {
@@ -169,16 +185,7 @@ func tableOf(t *blocks.TableData, inlineMath bool) *tableResult {
 		for j, cell := range row {
 			out.Rows[i][j] = make([][2]string, 0, len(cell))
 			for _, sp := range cell {
-				text := sp.Text
-				if strings.Contains(sp.Style, "math") {
-					text = "$" + text + "$"
-					if inlineMath {
-						if t, err := dal.RenderLine(sp.Text, dal.LineOptions{}); err == nil && t != "" {
-							text = t
-						}
-					}
-				}
-				out.Rows[i][j] = append(out.Rows[i][j], [2]string{text, sp.Style})
+				out.Rows[i][j] = append(out.Rows[i][j], [2]string{spanText(sp, inlineMath), sp.Style})
 			}
 		}
 	}
@@ -333,6 +340,12 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 		switch b.Kind {
 		case blocks.Heading:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+		case blocks.Para:
+			spans := make([][]any, 0, len(b.Spans))
+			for _, sp := range b.Spans {
+				spans = append(spans, []any{spanText(sp, req.InlineMath != 0), sp.Style, sp.Line})
+			}
+			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Col: b.Col, Spans: spans}
 		case blocks.Rule:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Col: b.Col}
 		case blocks.Code:
