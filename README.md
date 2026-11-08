@@ -16,15 +16,25 @@ Vim の画像表示機能（`+image` の popup image）を使い、mermaid・デ
 - 画像を表示できない端末（sixel・kitty に対応していない端末）や `+image` の無い Vim では、
   図・数式・画像をソースのまま出し、表などのテキストの表示だけで読める（`g:mdview_images`）
 
-- mermaid: [dam](../dam)（pure Go）
-- 数式: [dal](../dal)（pure Go）
+- mermaid: [dam](https://github.com/lea-151107/dam)（pure Go）
+- 数式: [dal](https://github.com/lea-151107/dal)（pure Go）
 - Vim との連携: [goda.vim](https://github.com/Shougo/goda.vim)
 
 ## 導入
 
+mdview の Go 側は、dal と dam を `go/go.mod` の replace で隣のディレクトリから使います。
+3 つを同じディレクトリに clone してください。
+
+```sh
+git clone https://github.com/lea-151107/mdview
+git clone https://github.com/lea-151107/dal
+git clone https://github.com/lea-151107/dam
+git clone https://github.com/Shougo/goda.vim
+```
+
 ```vim
-set runtimepath+=~/vim_markdown_viewer/deps/goda.vim
-set runtimepath+=~/vim_markdown_viewer/mdview
+set runtimepath+=/path/to/goda.vim
+set runtimepath+=/path/to/mdview
 ```
 
 Vim で `:MdviewBuild` を実行します（または `cd go && go build -o ../bin/mdview .`）。
@@ -51,3 +61,7 @@ echo '{"method":"goda.plugins"}' | ./bin/mdview --transport=jsonl
 ```
 
 確認用の文書: `testdata/full.md`（書式・表・図・数式・画像の一覧）、`testdata/nested.md`（入れ子と文中の要素）
+
+## ライセンス
+
+MIT License です（[LICENSE](LICENSE)）。

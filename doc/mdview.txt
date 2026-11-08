@@ -134,10 +134,18 @@ GitHub のアラートは、引用の 1 行目が [!NOTE]・[!TIP]・[!IMPORTANT
 ==============================================================================
 3. 導入						*mdview-install*
 
+mdview・dal・dam を同じディレクトリに clone します（mdview/go/go.mod の
+replace が ../../dal と ../../dam を使うため）。 >
+
+	git clone https://github.com/lea-151107/mdview
+	git clone https://github.com/lea-151107/dal
+	git clone https://github.com/lea-151107/dam
+	git clone https://github.com/Shougo/goda.vim
+<
 goda.vim と mdview を 'runtimepath' に入れます。 >
 
-	set runtimepath+=~/vim_markdown_viewer/deps/goda.vim
-	set runtimepath+=~/vim_markdown_viewer/mdview
+	set runtimepath+=/path/to/goda.vim
+	set runtimepath+=/path/to/mdview
 <
 Vim を起動して |:MdviewBuild| を実行します（mdview/go で go build し、
 mdview/bin/mdview を作ります）。シェルからでも同じです。 >

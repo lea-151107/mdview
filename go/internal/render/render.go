@@ -11,8 +11,8 @@ import (
 	"image/draw"
 	"strings"
 
-	"github.com/lea/dal"
-	mermaid "github.com/lea/mermaid"
+	"github.com/lea-151107/dal"
+	mermaid "github.com/lea-151107/dam"
 	xdraw "golang.org/x/image/draw"
 )
 

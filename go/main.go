@@ -18,13 +18,13 @@ import (
 
 	"github.com/Shougo/goda.vim/host"
 	"github.com/Shougo/goda.vim/sdk"
-	"github.com/lea/dal"
-	mermaid "github.com/lea/mermaid"
+	"github.com/lea-151107/dal"
+	mermaid "github.com/lea-151107/dam"
 
-	"mdview/internal/blocks"
-	"mdview/internal/cache"
-	"mdview/internal/imageload"
-	"mdview/internal/render"
+	"github.com/lea-151107/mdview/go/internal/blocks"
+	"github.com/lea-151107/mdview/go/internal/cache"
+	"github.com/lea-151107/mdview/go/internal/imageload"
+	"github.com/lea-151107/mdview/go/internal/render"
 )
 
 // renderVersion changes whenever this program draws differently, so that

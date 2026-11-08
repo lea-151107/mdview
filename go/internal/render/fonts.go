@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	mermaid "github.com/lea/mermaid"
+	mermaid "github.com/lea-151107/dam"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 )

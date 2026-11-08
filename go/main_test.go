@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"mdview/internal/blocks"
-	"mdview/internal/render"
+	"github.com/lea-151107/mdview/go/internal/blocks"
+	"github.com/lea-151107/mdview/go/internal/render"
 )
 
 func TestRenderAll(t *testing.T) {
