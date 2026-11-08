@@ -26,6 +26,8 @@ mdview は、Markdown を読むためのビューアを Vim の中に開きま�
   - インライン数式 $…$: x² のような 1 行のテキストに置き換えます
   - 見出し: 太字にします
   - 表: 罫線で囲み、列を揃えたテキストにします（|mdview-tables|）
+  - コードブロック: 枠で囲み、言語名を出し、言語の構文の色を付けます
+    （|mdview-code|）
   - 引用: > を縦線にします。GitHub のアラート（> [!NOTE] など）は種類ごとの
     色と見出しで表します（|mdview-quotes|）
 
@@ -70,6 +72,25 @@ GFM の表は、罫線（┌─┬┐ │ ├┼┤ └┴┘）で囲んだテ�
 の幅が変わると組み直します。
 'ambiwidth' が "double" のときは、罫線の文字が 2 桁になるため、ASCII の
 罫線（+ - |）を使います。
+
+コードブロック					*mdview-code*
+``` と ~~~ のコードブロックを枠で囲みます。開きのフェンスの行は言語名の
+入った上の線に、閉じのフェンスの行は下の線にします。中身の行の左には縦線を
+付けます。 >
+	╭─ go ──────────────────
+	│ func main() {
+	│ }
+	╰───────────────────────
+<
+中身には、Vim の構文ファイル（syntax/{言語}.vim）がある言語なら、その色を
+自動で付けます（js・py・sh・c++ のような別名も読み替えます。
+|g:mdview_fenced_languages|）。構文ファイルの無い言語と言語名の無いものは
+MdviewCodeBlock の色にします。縦線はバッファの文字ではなく仮想テキスト
+（|textprop|）なので、言語の構文は中身だけを見ます（diff の行頭の + など）。
+タブは空白に展開します。閉じていないコードブロックには下の線を付けません。
+mermaid と数式のフェンスも、描かないとき（|g:mdview_images|）や描けない
+ときは、この枠で表示します。'ambiwidth' が "double" のときは、ASCII の
+枠（+ - |）を使います。
 
 引用						*mdview-quotes*
 引用の > を縦線（│）にします。入れ子の引用は │ │ になります。ふつうの引用は
@@ -200,9 +221,11 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 	「⛔ Caution」です。どれも端末で 2 桁の絵文字です。
 
 *g:mdview_fenced_languages*	(既定: [])
-	ビューアのコードブロックを色付けする言語。書き方は
-	|g:markdown_fenced_languages| と同じです（例: ['go', 'sh=bash']）。
-	|g:markdown_fenced_languages| を設定しているときは、そちらを使います。
+	コードブロックの言語名から Vim の構文への読み替え（|mdview-code|）。
+	書き方は |g:markdown_fenced_languages| と同じで、"言語名=構文" と
+	書きます（例: ['bash=sh', 'conf=dosini']）。|g:markdown_fenced_languages|
+	の読み替えも使います。よく使う別名（js・ts・py・rb・sh・bash・yml・
+	rs・c++・golang など）は設定しなくても読み替えます。
 
 *g:mdview_sync_back*		(既定: 0)
 	1 のとき、ビューアをスクロールすると、ソースも同じ箇所が上端に
@@ -285,6 +308,9 @@ MdviewStrike	表のセルの取消線（既定: 取消線）
 MdviewUnderline	表のセルの下線（既定: 下線）
 MdviewLink	表のセルのリンク（既定: Underlined）
 MdviewImage	表のセルの画像の代替テキスト（既定: Special）
+MdviewCodeBorder	コードブロックの枠（既定: Comment）
+MdviewCodeLang	コードブロックの言語名（既定: Title）
+MdviewCodeBlock	構文ファイルの無い言語のコード（既定: markdownCode）
 MdviewQuote	ふつうの引用の本文（既定: Comment）
 MdviewQuoteBar	ふつうの引用の縦線（既定: Comment）
 MdviewAlertNote		アラートの縦線と見出し（既定: 青）
@@ -302,6 +328,9 @@ MdviewAlertCaution	（既定: 赤）
   - \[ は段落の途中では数式を始めません。$$ と \[ のブロックは、空行の
     前に閉じがあるときだけ数式にします。
   - http(s) の画像は 1 日 1 回取得し直します。
+  - 字下げ（4 桁）のコードブロックは枠で囲まず、ソースのまま表示します。
+  - コードブロックの中の長い行を折り返したとき、続きの行には縦線が付き
+    ません。
   - 表のセルの中の書式は、表の外の行のように markdown の構文の色では
     なく、|mdview-highlights| の Mdview* で表します。セルの中のリンクは
     文字だけを表示し、URL は表示しません。

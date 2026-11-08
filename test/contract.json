@@ -15,7 +15,10 @@
     "  A --\u003e",
     "```",
     "\u003e [!TIP]",
-    "\u003e - \u003e t"
+    "\u003e - \u003e t",
+    "```go",
+    "\tx := 1",
+    "```"
   ],
   "results": [
     {
@@ -38,6 +41,21 @@
       "col_end": 0
     },
     {
+      "kind": "code",
+      "start": 2,
+      "end": 5,
+      "col": 0,
+      "col_end": 0,
+      "lang": "mermaid",
+      "cols": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "closed": true
+    },
+    {
       "kind": "inline_math",
       "start": 6,
       "end": 6,
@@ -51,7 +69,7 @@
       "kind": "image",
       "start": 6,
       "end": 6,
-      "key": "k3",
+      "key": "k4",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -111,7 +129,7 @@
       "kind": "image",
       "start": 7,
       "end": 7,
-      "key": "k5",
+      "key": "k6",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -140,7 +158,7 @@
       "kind": "image",
       "start": 10,
       "end": 10,
-      "key": "k7",
+      "key": "k8",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -156,6 +174,21 @@
       "error": "error",
       "col": 0,
       "col_end": 0
+    },
+    {
+      "kind": "code",
+      "start": 11,
+      "end": 14,
+      "col": 0,
+      "col_end": 0,
+      "lang": "mermaid",
+      "cols": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "closed": true
     },
     {
       "kind": "quote",
@@ -178,6 +211,20 @@
       "marks": [
         4
       ]
+    },
+    {
+      "kind": "code",
+      "start": 17,
+      "end": 19,
+      "col": 0,
+      "col_end": 0,
+      "lang": "go",
+      "cols": [
+        0,
+        0,
+        0
+      ],
+      "closed": true
     }
   ]
 }

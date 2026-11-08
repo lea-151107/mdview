@@ -45,6 +45,7 @@ func TestRenderAll(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		res = withoutCode(res)
 		if len(res) != 5 {
 			t.Fatalf("got %d results: %+v", len(res), res)
 		}
@@ -82,7 +83,7 @@ func TestRunProgressive(t *testing.T) {
 	var calls []call
 	p := &plugin{}
 	collect := func(rs []result, final bool) error {
-		calls = append(calls, call{shown(rs), final})
+		calls = append(calls, call{withoutCode(shown(rs)), final})
 		return nil
 	}
 	if err := p.run(context.Background(), req, collect); err != nil {
@@ -125,6 +126,18 @@ func TestRunProgressive(t *testing.T) {
 	}
 }
 
+// withoutCode drops the code results (each fence has one besides its
+// drawing).
+func withoutCode(rs []result) []result {
+	var out []result
+	for _, r := range rs {
+		if r.Kind != "code" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func TestRunNoImages(t *testing.T) {
 	dir := t.TempDir()
 	req := request{
@@ -150,7 +163,7 @@ func TestRunNoImages(t *testing.T) {
 	for _, r := range got {
 		kinds = append(kinds, r.Kind)
 	}
-	if calls != 1 || strings.Join(kinds, ",") != "heading,inline_math,table" {
+	if calls != 1 || strings.Join(kinds, ",") != "heading,code,inline_math,table" {
 		t.Fatalf("calls %d, kinds %v", calls, kinds)
 	}
 }
@@ -248,6 +261,7 @@ func TestContract(t *testing.T) {
 		"> ![a](a.png)",
 		"```mermaid", "graph TD", "  A -->", "```",
 		"> [!TIP]", "> - > t",
+		"```go", "\tx := 1", "```",
 	}
 	req := request{Lines: lines, Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16},
 		WidthPx: 640, HeightPx: 480, InlineMath: 1}

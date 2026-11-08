@@ -14,7 +14,7 @@
 
 let s:root = expand('<sfile>:p:h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 4
+let s:script_version = 5
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -76,6 +76,7 @@ function! s:init() abort
   endif
   call s:init_table()
   call s:init_quote()
+  call s:init_code()
   augroup mdview_global
     autocmd!
     autocmd WinClosed * call s:close_popups(str2nr(expand('<amatch>')))
@@ -170,6 +171,9 @@ function! mdview#open(...) abort
   execute 'augroup mdview_view_' . viewer
     autocmd!
     execute 'autocmd BufWipeout <buffer=' . viewer . '> call s:detach(' . src . ')'
+    " The syntax was loaded again (it drops the code blocks' regions).
+    execute 'autocmd Syntax <buffer=' . viewer . '> call s:code_syntax(' . viewer
+          \ . ', get(s:state(' . src . '), "code", []), 1)'
   augroup END
 
   let state.viewer = viewer
@@ -442,8 +446,13 @@ function! s:build_view(src, results, ...) abort
   let headings = {}   " source line -> 1
   let inline = {}     " source line -> [[col, col_end, text]]
   let quotes = {}     " source line -> [[col of '>' or -1, alert, title line]], outer first
+  let codes = {}      " source line -> its code block's result
   for r in a:results
-    if r.kind ==# 'quote'
+    if r.kind ==# 'code'
+      for l in range(r.start, r.end)
+        let codes[l] = r
+      endfor
+    elseif r.kind ==# 'quote'
       let alert = get(r, 'alert', '')
       for k in range(len(get(r, 'marks', [])))
         let l = r.start + k
@@ -485,8 +494,10 @@ function! s:build_view(src, results, ...) abort
     endif
   endfor
 
-  let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: []}
-  let cx = #{headings: headings, inline: inline, quotes: quotes}
+  " code: the syntax regions of code blocks, [[first, last, syntax, start]].
+  let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: [], code: []}
+  let cx = #{headings: headings, inline: inline, quotes: quotes, codes: codes,
+        \ cols: opts.cols, ts: getbufvar(a:src, '&tabstop', 8)}
   let i = 1
   for g in groups
     while i < g.start && i <= n
@@ -594,6 +605,212 @@ function! s:quote_prefix(line, marks, blank) abort
     let pos = c + 1
   endfor
   return [text, props, pos]
+endfunction
+
+" ---------------------------------------------------------------------------
+" Code blocks
+
+" Language names of fences that differ from their Vim syntax ('' for none).
+let s:code_aliases = {'js': 'javascript', 'mjs': 'javascript', 'cjs': 'javascript',
+      \ 'ts': 'typescript', 'tsx': 'typescriptreact', 'jsx': 'javascriptreact',
+      \ 'py': 'python', 'python3': 'python', 'rb': 'ruby', 'bash': 'sh', 'shell': 'sh',
+      \ 'shellscript': 'sh', 'yml': 'yaml', 'rs': 'rust', 'kt': 'kotlin', 'csharp': 'cs',
+      \ 'c#': 'cs', 'c++': 'cpp', 'cxx': 'cpp', 'hpp': 'cpp', 'h': 'c', 'golang': 'go',
+      \ 'viml': 'vim', 'vimscript': 'vim', 'pwsh': 'ps1', 'powershell': 'ps1',
+      \ 'jsonc': 'json', 'json5': 'json', 'hs': 'haskell', 'ex': 'elixir', 'exs': 'elixir',
+      \ 'pl': 'perl', 'makefile': 'make', 'patch': 'diff', 'latex': 'tex',
+      \ 'objective-c': 'objc', 'objectivec': 'objc', 'md': '', 'markdown': ''}
+let s:syntax_files = {}   " syntax name -> whether a syntax file exists
+
+function! s:init_code() abort
+  highlight default link MdviewCodeBorder Comment
+  highlight default link MdviewCodeLang Title
+  highlight default link MdviewCodeBlock markdownCode
+  highlight default link mdviewCodePlain MdviewCodeBlock
+  for [name, opts] in [['mdview_code_border', #{highlight: 'MdviewCodeBorder', priority: 10}],
+        \ ['mdview_code_lang', #{highlight: 'MdviewCodeLang', priority: 20}],
+        \ ['mdview_code_gap', {}]]
+    if empty(prop_type_get(name))
+      call prop_type_add(name, opts)
+    endif
+  endfor
+endfunction
+
+function! s:code_chars() abort
+  if &ambiwidth ==# 'double'
+    return #{tl: '+', bl: '+', h: '-', v: '|'}
+  endif
+  return #{tl: '╭', bl: '╰', h: '─', v: '│'}
+endfunction
+
+" The Vim syntax for the language of a fence, or '' (none, or no syntax
+" file). g:mdview_fenced_languages (and g:markdown_fenced_languages) map
+" names with "name=syntax".
+function! s:code_syntax_name(lang) abort
+  let name = tolower(a:lang)
+  for e in get(g:, 'mdview_fenced_languages', []) + get(g:, 'markdown_fenced_languages', [])
+    let [k, syn] = e =~# '=' ? split(e, '=', 1)[:1] : [e, e]
+    if tolower(k) ==# name
+      let name = syn
+      break
+    endif
+  endfor
+  let name = get(s:code_aliases, name, name)
+  if name !~# '^[a-z0-9_]\+$' || name ==# 'markdown'
+    return ''
+  endif
+  if !has_key(s:syntax_files, name)
+    let s:syntax_files[name] = !empty(globpath(&runtimepath, 'syntax/' . name . '.vim', 0, 1))
+  endif
+  return s:syntax_files[name] ? name : ''
+endfunction
+
+" Expand the tabs of text (whose first column is a tab stop).
+function! s:expand_tabs(text, ts) abort
+  if stridx(a:text, "\t") < 0
+    return a:text
+  endif
+  let out = ''
+  let w = 0
+  for c in split(a:text, '\zs')
+    if c ==# "\t"
+      let n = a:ts - w % a:ts
+      let out .= repeat(' ', n)
+      let w += n
+    else
+      let out .= c
+      let w += strdisplaywidth(c)
+    endif
+  endfor
+  return out
+endfunction
+
+" Copy line l of a code block (cx.codes): the fences become the top (with
+" the language) and the bottom of a frame; the code keeps its text (tabs
+" expanded), with the frame's bar and the bars of quotes before it as
+" virtual text, so that the language's syntax sees the code alone. Returns
+" 0 when the line is not known (left to s:copy_line()).
+function! s:code_line(v, src_lines, l, cx) abort
+  let r = a:cx.codes[a:l]
+  let lang = get(r, 'lang', '')   " (left out when empty)
+  let k = a:l - r.start
+  let col = get(r.cols, k, -1)
+  if col < 0 || r.cols[0] < 0
+    return 0
+  endif
+  let src = a:src_lines[a:l - 1]
+  let ch = s:code_chars()
+  let marks = get(a:cx.quotes, a:l, [])
+  call add(a:v.map, len(a:v.lines) + 1)
+  if k == 0
+    " The opening fence: the top with the language, after the quote and
+    " list marks.
+    let [t, props, qend] = s:quote_prefix(src, marks, 0)
+    let t .= strpart(src, qend, col - qend)
+    let rule = len(t)
+    let t .= ch.tl . ch.h
+    if !empty(lang)
+      call add(props, [len(t) + 2, 'mdview_code_lang', len(lang)])
+      let t .= ' ' . lang . ' '
+    endif
+    let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t)]))
+    call add(props, [rule + 1, 'mdview_code_border', len(t) - rule])
+    call s:add_line(a:v, t, a:l, props)
+    return 1
+  endif
+  " The other lines go on at the column of the opening fence.
+  let [pre, props, _] = s:quote_prefix(src, marks, 1)
+  let pre .= repeat(' ', max([0, s:display_indent(a:src_lines[r.start - 1], r.cols[0])
+        \ - strdisplaywidth(pre)]))
+  if get(r, 'closed', 0) && a:l == r.end
+    let t = pre . ch.bl
+    let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t)]))
+    call add(props, [len(pre) + 1, 'mdview_code_border', len(t) - len(pre)])
+    call s:add_line(a:v, t, a:l, props)
+    return 1
+  endif
+  " Code: the prefix as virtual texts, in order (each bar its own type).
+  let vt = []
+  let pos = 0
+  for [c, type, n] in props
+    if c - 1 > pos
+      call add(vt, [1, 'mdview_code_gap', strpart(pre, pos, c - 1 - pos)])
+    endif
+    call add(vt, [1, type, strpart(pre, c - 1, n)])
+    let pos = c - 1 + n
+  endfor
+  if pos < len(pre)
+    call add(vt, [1, 'mdview_code_gap', strpart(pre, pos)])
+  endif
+  call add(vt, [1, 'mdview_code_border', ch.v . ' '])
+  call s:add_line(a:v, s:expand_tabs(strpart(src, col), a:cx.ts), a:l, vt)
+  let lnum = len(a:v.lines)
+  if !empty(a:v.code) && a:v.code[-1][3] == r.start && a:v.code[-1][1] == lnum - 1
+    let a:v.code[-1][1] = lnum
+  else
+    call add(a:v.code, [lnum, lnum, s:code_syntax_name(lang), r.start])
+  endif
+  return 1
+endfunction
+
+" Give the code of the viewer the syntax of its language: a region on the
+" lines of each code block ([[first, last, syntax, _]]), defined after the
+" markdown syntax so that it wins. reset: the syntax was loaded again.
+function! s:code_syntax(viewer, regions, ...) abort
+  let wins = win_findbuf(a:viewer)
+  if !empty(wins)
+    call win_execute(wins[0], 'call s:code_syntax_here(a:regions, a:0 && a:1)')
+  endif
+endfunction
+
+function! s:code_syntax_here(regions, reset) abort
+  if !exists('b:current_syntax')
+    return
+  endif
+  if a:reset
+    let b:mdview_code_langs = {}
+    let b:mdview_code_groups = []
+  endif
+  for g in get(b:, 'mdview_code_groups', [])
+    execute 'silent! syntax clear' g
+  endfor
+  let groups = {}
+  for [first, last, name; _] in a:regions
+    let cluster = s:include_syntax(name)
+    let group = empty(cluster) ? 'mdviewCodePlain' : 'mdviewCode_' . name
+    execute printf('syntax region %s start=/\%%%dl^/ end=/\%%%dl$/ keepend%s',
+          \ group, first, last, empty(cluster) ? '' : ' contains=@' . cluster)
+    let groups[group] = 1
+  endfor
+  let b:mdview_code_groups = keys(groups)
+  " The regions start at line numbers: find them from the top.
+  syntax sync fromstart
+endfunction
+
+" Load the syntax name into the cluster @mdviewLang_{name}, once per buffer.
+" Returns the cluster's name, or ''.
+function! s:include_syntax(name) abort
+  if empty(a:name)
+    return ''
+  endif
+  if !exists('b:mdview_code_langs')
+    let b:mdview_code_langs = {}
+  endif
+  if !has_key(b:mdview_code_langs, a:name)
+    let cluster = 'mdviewLang_' . a:name
+    let saved = b:current_syntax
+    unlet b:current_syntax
+    try
+      execute 'silent syntax include @' . cluster . ' syntax/' . a:name . '.vim'
+      let b:mdview_code_langs[a:name] = cluster
+    catch
+      let b:mdview_code_langs[a:name] = ''
+    finally
+      let b:current_syntax = saved
+      syntax case match
+    endtry
+  endif
+  return b:mdview_code_langs[a:name]
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -974,7 +1191,8 @@ function! s:add_images(v, images, src_line, quote, opts, first_line) abort
   endfor
 endfunction
 
-" Add a line with properties [[col, type, length]] (col 1-based).
+" Add a line with properties [[col, type, length]] (col 1-based). A length
+" that is a string is the text of a virtual text property.
 function! s:add_line(v, line, src_line, props) abort
   call add(a:v.lines, a:line)
   call add(a:v.rmap, a:src_line)
@@ -990,6 +1208,9 @@ endfunction
 " {headings, inline, quotes} of s:build_view().
 function! s:copy_line(v, src_lines, l, cx) abort
   let src = a:src_lines[a:l - 1]
+  if has_key(a:cx.codes, a:l) && s:code_line(a:v, a:src_lines, a:l, a:cx)
+    return
+  endif
   let [t, props, pos] = s:quote_prefix(src, get(a:cx.quotes, a:l, []), 0)
   let body = -1   " where the text of a plain quote starts (shown dimmed)
   if has_key(a:cx.quotes, a:l)
@@ -1076,7 +1297,9 @@ function! s:draw(src, state) abort
     endif
     for [lnum, type, len, col] in v.props
       if lnum > p && lnum <= newn - q
-        call prop_add(lnum, col, #{bufnr: viewer, type: type, length: len})
+        call prop_add(lnum, col, type(len) == v:t_string
+              \ ? #{bufnr: viewer, type: type, text: len}
+              \ : #{bufnr: viewer, type: type, length: len})
       endif
     endfor
     call setbufvar(viewer, '&modifiable', 0)
@@ -1098,6 +1321,10 @@ function! s:draw(src, state) abort
     call prop_add(a.last, 1, #{bufnr: viewer, type: 'mdview_anchor_end', id: a.id, length: 0})
   endfor
   let a:state.anchors = kept_before + added + kept_after
+  if get(a:state, 'code', []) != v.code
+    call s:code_syntax(viewer, v.code)
+  endif
+  let a:state.code = v.code
   let a:state.sig = v.sig
   let a:state.map = v.map
   let a:state.rmap = v.rmap
@@ -1267,22 +1494,7 @@ endfunction
 " filetype=markdown for the viewer, with g:mdview_fenced_languages as the
 " fenced code languages when the user has not set g:markdown_fenced_languages.
 function! s:set_markdown_filetype() abort
-  let langs = get(g:, 'mdview_fenced_languages', [])
-  if empty(langs) || !empty(get(g:, 'markdown_fenced_languages', []))
-    setlocal filetype=markdown
-    return
-  endif
-  let saved = exists('g:markdown_fenced_languages') ? g:markdown_fenced_languages : v:null
-  let g:markdown_fenced_languages = langs
-  try
-    setlocal filetype=markdown
-  finally
-    if saved is v:null
-      unlet! g:markdown_fenced_languages
-    else
-      let g:markdown_fenced_languages = saved
-    endif
-  endtry
+  setlocal filetype=markdown
 endfunction
 
 " ---------------------------------------------------------------------------

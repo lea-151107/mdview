@@ -280,3 +280,94 @@ function! Test_build_view_quote_list_image() abort
   call assert_equal(['  │', '  │'], v.lines[:1])
   call assert_equal([[1, 2, 4]], map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
 endfunction
+
+" Code blocks: the fences become a frame, the code keeps its text with the
+" bar as virtual text.
+function! Test_build_view_code() abort
+  let src = Src(['```go', "func f() {", "\tx := 1", '', '}', '```', 'after'])
+  let v = S('build_view')(src, [#{kind: 'code', start: 1, end: 6, lang: 'go',
+        \ cols: [0, 0, 0, 0, 0, 0], closed: 1}], #{cellw: 8, cols: 20})
+  call assert_equal(['╭─ go ' . repeat('─', 14), 'func f() {', '        x := 1', '', '}',
+        \ '╰' . repeat('─', 19), 'after'], v.lines)
+  call assert_equal(range(1, 7), v.map)
+  call assert_equal([[1, 'mdview_code_lang', 2, 8], [1, 'mdview_code_border', len(v.lines[0]), 1],
+        \ [2, 'mdview_code_border', '│ ', 1], [3, 'mdview_code_border', '│ ', 1],
+        \ [4, 'mdview_code_border', '│ ', 1], [5, 'mdview_code_border', '│ ', 1],
+        \ [6, 'mdview_code_border', len(v.lines[5]), 1]], v.props)
+  call assert_equal([[2, 5, 'go', 1]], v.code)
+endfunction
+
+" In a quote and a list: the frame goes on after the bars of the quote and at
+" the column of the opening fence; no language, not closed.
+function! Test_build_view_code_in_quote_and_list() abort
+  let src = Src(['> - ```', '>   x', '>  y'])
+  let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 3, marks: [0, 0, 0]},
+        \ #{kind: 'code', start: 1, end: 3, cols: [4, 4, 3]}], #{cellw: 8, cols: 20})
+  call assert_equal(['│ - ╭' . repeat('─', 15), 'x', 'y'], v.lines)
+  call assert_equal([[2, 'mdview_quote_bar', '│', 1], [2, 'mdview_code_gap', '   ', 1],
+        \ [2, 'mdview_code_border', '│ ', 1]], filter(copy(v.props), 'v:val[0] == 2'))
+  call assert_equal([[2, 3, '', 1]], v.code)
+endfunction
+
+" A mermaid that is not drawn shows its code in a frame; one that is drawn
+" does not.
+function! Test_build_view_code_of_mermaid() abort
+  let src = Src(['```mermaid', 'graph TD', '```'])
+  let code = #{kind: 'code', start: 1, end: 3, lang: 'mermaid', cols: [0, 0, 0], closed: 1}
+  let v = S('build_view')(src, [#{kind: 'mermaid', start: 1, end: 3, error: 'x'}, code], #{cellw: 8, cols: 20})
+  call assert_equal(['╭─ mermaid ' . repeat('─', 9), 'graph TD', '╰' . repeat('─', 19), 'mdview: x'], v.lines)
+  let v = S('build_view')(src, [#{kind: 'mermaid', start: 1, end: 3, key: 'k', path: '/p',
+        \ w: 8, h: 16, rows: 1}, code], #{cellw: 8, cols: 20})
+  call assert_equal([''], v.lines)
+  call assert_equal([], v.code)
+endfunction
+
+function! Test_build_view_code_ambiwidth_double() abort
+  let src = Src(['```', 'x', '```'])
+  set ambiwidth=double
+  try
+    let v = S('build_view')(src, [#{kind: 'code', start: 1, end: 3, cols: [0, 0, 0],
+          \ closed: 1}], #{cellw: 8, cols: 6})
+  finally
+    set ambiwidth=single
+  endtry
+  call assert_equal(['+-----', 'x', '+-----'], v.lines)
+  call assert_equal('| ', v.props[1][2])
+endfunction
+
+function! Test_code_syntax_name() abort
+  let Name = S('code_syntax_name')
+  call assert_equal('vim', Name('vim'))
+  call assert_equal('vim', Name('VimScript'))
+  call assert_equal('javascript', Name('js'))
+  call assert_equal('cpp', Name('c++'))
+  call assert_equal('', Name('markdown'))
+  call assert_equal('', Name('no-such-language'))
+  call assert_equal('', Name('nosuchlanguage'))
+  let g:mdview_fenced_languages = ['foo=vim']
+  try
+    call assert_equal('vim', Name('foo'))
+  finally
+    unlet g:mdview_fenced_languages
+  endtry
+endfunction
+
+" The regions give the code its language's syntax, and none of markdown's.
+function! Test_code_syntax() abort
+  syntax enable
+  try
+    call Src(['# x', 'let x = 1', '# y', 'z'])
+    setlocal filetype=markdown
+    call S('code_syntax_here')([[2, 3, 'vim', 1], [4, 4, '', 4]], 0)
+    call assert_match('^vim', synIDattr(synID(2, 1, 1), 'name'))
+    call assert_equal('mdviewCode_vim', synIDattr(synstack(3, 1)[0], 'name'))
+    call assert_equal('mdviewCodePlain', synIDattr(synID(4, 1, 1), 'name'))
+    call assert_match('^markdown', synIDattr(synID(1, 1, 1), 'name'))
+    " Drawn again: the old regions go.
+    call S('code_syntax_here')([[1, 1, '', 1]], 0)
+    call assert_equal('mdviewCodePlain', synIDattr(synID(1, 1, 1), 'name'))
+    call assert_notequal('mdviewCode_vim', synIDattr(get(synstack(3, 1), 0, 0), 'name'))
+  finally
+    syntax off
+  endtry
+endfunction

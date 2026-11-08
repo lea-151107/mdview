@@ -13,10 +13,13 @@ function! Test_contract() abort
         \ '┌────┬──────┐', '│    │ cell │', '│    │      │', '├────┼──────┤', '│ y  │    b │',
         \ '└────┴──────┘',
         \ '│', '│',
-        \ '```mermaid', 'graph TD', '  A -->', '```', 'mdview: error',
+        \ '╭─ mermaid ' . repeat('─', 69), 'graph TD', '  A -->', '╰' . repeat('─', 79),
+        \ 'mdview: error',
         \ '│ 💡 Tip', '│ - │ t',
+        \ '╭─ go ' . repeat('─', 74), '        x := 1', '╰' . repeat('─', 79),
         \ ], v.lines)
-  call assert_equal(['mdview_alert_tip', 'mdview_bold', 'mdview_error', 'mdview_heading',
+  call assert_equal(['mdview_alert_tip', 'mdview_bold', 'mdview_code_border',
+        \ 'mdview_code_lang', 'mdview_error', 'mdview_heading',
         \ 'mdview_math', 'mdview_quote', 'mdview_quote_bar',
         \ 'mdview_table', 'mdview_table_border', 'mdview_table_header'],
         \ uniq(sort(map(copy(v.props), 'v:val[1]'))))
@@ -24,4 +27,6 @@ function! Test_contract() abort
   " borders), the one in a quote.
   call assert_equal([[2, 3, 0], [5, 6, 0], [8, 9, 2], [13, 14, 2]],
         \ map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
+  " The code of the broken mermaid and of the go block, for their syntax.
+  call assert_equal([[16, 17, 'mermaid'], [23, 23, 'go']], map(copy(v.code), 'v:val[:2]'))
 endfunction

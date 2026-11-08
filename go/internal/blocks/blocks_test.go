@@ -207,6 +207,16 @@ func FuzzParseRanges(f *testing.F) {
 					}
 				}
 			}
+			if b.Kind == Code {
+				if len(b.Cols) != b.End-b.Start+1 {
+					t.Fatalf("bad code cols %+v", b)
+				}
+				for i, c := range b.Cols {
+					if c > len(lines[b.Start-1+i]) {
+						t.Fatalf("bad code col %d in %q (%+v)", c, lines[b.Start-1+i], b)
+					}
+				}
+			}
 			if b.Kind == InlineMath {
 				l := lines[b.Start-1]
 				if b.Col < 0 || b.Col >= b.ColEnd || b.ColEnd > len(l) || l[b.Col] != '$' {
@@ -381,5 +391,46 @@ func TestQuote(t *testing.T) {
 				t.Fatalf("got\n%#v\nwant\n%#v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestCode(t *testing.T) {
+	type c struct {
+		Start, End int
+		Lang       string
+		Cols       []int
+		Closed     bool
+	}
+	cases := []struct {
+		name string
+		doc  string
+		want []c
+	}{
+		{"go", "a\n\n```go\nx\n\ty\n```\nb", []c{{3, 6, "go", []int{0, 0, 0, 0}, true}}},
+		{"no info, tilde", "~~~\nx\n~~~", []c{{1, 3, "", []int{0, 0, 0}, true}}},
+		{"info with attributes", "```Python {.x}\nx\n```", []c{{1, 3, "Python", []int{0, 0, 0}, true}}},
+		{"empty", "```sh\n```", []c{{1, 2, "sh", []int{0, 0}, true}}},
+		{"blank line inside", "```\na\n\nb\n```", []c{{1, 5, "", []int{0, 0, 0, 0, 0}, true}}},
+		{"in a quote", "> ```go\n> x\n> ```", []c{{1, 3, "go", []int{2, 2, 2}, true}}},
+		{"in a list", "- ```go\n  x\n   y\n  ```", []c{{1, 4, "go", []int{2, 2, 2, 2}, true}}},
+		{"indented fence", "  ```\n  x\n y\n  ```", []c{{1, 4, "", []int{2, 2, 1, 2}, true}}},
+		{"unclosed", "```go\nx", []c{{1, 2, "go", []int{0, 0}, false}}},
+		{"cut off by the end of its list item", "- ```\n  x\n```\ny",
+			[]c{{1, 2, "", []int{2, 2}, false}, {3, 4, "", []int{0, 0}, false}}},
+		{"mermaid is also code", "```mermaid\ngraph TD\n```", []c{{1, 3, "mermaid", []int{0, 0, 0}, true}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []c
+			for _, b := range ofKind(Parse(strings.Split(tc.doc, "\n")), Code) {
+				got = append(got, c{b.Start, b.End, b.Lang, b.Cols, b.Closed})
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got\n%#v\nwant\n%#v", got, tc.want)
+			}
+		})
+	}
+	if len(ofKind(Parse([]string{"```mermaid", "graph TD", "```"}), Mermaid)) != 1 {
+		t.Fatal("mermaid block missing")
 	}
 }

@@ -2,7 +2,7 @@
 " that shows images. Run: vim -Nu NONE -i NONE -es -S test/run.vim
 " (make test-vim). Exits with status 1 when a test fails.
 
-set nocompatible
+set nocompatible noswapfile
 let s:dir = expand('<sfile>:p:h')
 execute 'set runtimepath^=' . fnameescape(fnamemodify(s:dir, ':h'))
 runtime autoload/mdview.vim
@@ -28,6 +28,7 @@ for s:t in ['mdview_anchor', 'mdview_anchor_end', 'mdview_text', 'mdview_error',
 endfor
 call S('init_table')()
 call S('init_quote')()
+call S('init_code')()
 
 " A source buffer and a viewer for it, with the state mdview#open() makes.
 function! Viewer(lines) abort

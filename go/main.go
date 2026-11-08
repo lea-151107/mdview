@@ -32,7 +32,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 4
+const scriptVersion = 5
 
 const blockTimeout = 15 * time.Second
 
@@ -145,6 +145,11 @@ type result struct {
 	// Marks: the column of a quote's '>' on each of its lines, or -1.
 	Marks []int  `json:"marks,omitempty"`
 	Alert string `json:"alert,omitempty"`
+	// A code block: its language, the column of each line's text (or -1),
+	// and whether End is its closing fence.
+	Lang   string `json:"lang,omitempty"`
+	Cols   []int  `json:"cols,omitempty"`
+	Closed bool   `json:"closed,omitempty"`
 }
 
 // tableResult is a table for Vim: rows[row][column] is a list of
@@ -328,6 +333,9 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 		switch b.Kind {
 		case blocks.Heading:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+		case blocks.Code:
+			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End,
+				Lang: b.Lang, Cols: b.Cols, Closed: b.Closed}
 		case blocks.Quote:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Marks: b.Marks, Alert: b.Alert}
 		case blocks.Table:

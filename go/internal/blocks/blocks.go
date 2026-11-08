@@ -31,6 +31,7 @@ const (
 	InlineMath Kind = "inline_math" // $…$ inside a line, shown as text
 	Table      Kind = "table"       // a GFM table, laid out by Vim from Block.Table
 	Quote      Kind = "quote"       // a blockquote, its '>' drawn as bars by Vim
+	Code       Kind = "code"        // a fenced code block, framed by Vim
 )
 
 // Block is one part of the document. Start and End are 1-based line
@@ -48,6 +49,11 @@ const (
 // For Quote, Start..End are the quote's lines (blocks inside it are blocks
 // of their own); Marks has the 0-based byte column of its '>' on each of
 // them, or -1 for a line without one (a lazy continuation line).
+//
+// For Code, Start..End are the fence lines and the code; Cols has the
+// 0-based byte column where each line's text starts after its quote or
+// list marks (the fence, the code), or -1. A mermaid or math fence is both
+// its Mermaid or Math block and a Code block, shown when it is not drawn.
 //
 // For InlineMath, Start == End is the line, and Col and ColEnd are the
 // 0-based byte range of the $…$ in that line.
@@ -67,6 +73,9 @@ type Block struct {
 	Cell   *CellPos   // Image: the table cell it is in, or nil
 	Marks  []int      // Quote: column of its '>' on each line, or -1
 	Alert  string     // Quote: a GitHub alert's kind ("note", "tip", …), or ""
+	Lang   string     // Code: the first word of the info string, as written
+	Cols   []int      // Code: column of the text of each line, or -1
+	Closed bool       // Code: End is the closing fence
 }
 
 // CellPos is where an image in a table is: the row (0 is the header) and
@@ -137,6 +146,9 @@ func Parse(lines []string) []Block {
 			if blk, ok := d.fenced(n); ok {
 				out = append(out, blk)
 			}
+			if blk, ok := d.code(n); ok {
+				out = append(out, blk)
+			}
 			return ast.WalkSkipChildren, nil
 		case *MathBlock:
 			if n.Closed {
@@ -178,6 +190,21 @@ func Parse(lines []string) []Block {
 		return ast.WalkContinue, nil
 	})
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Start < out[j].Start })
+	// A fence line outside the code's quote or list item is not its closing
+	// fence but the opening of the next code block.
+	opens := map[int]bool{}
+	for _, b := range out {
+		if b.Kind == Code {
+			opens[b.Start] = true
+		}
+	}
+	for i := range out {
+		if b := &out[i]; b.Kind == Code && b.Closed && opens[b.End] {
+			b.Closed = false
+			b.End--
+			b.Cols = b.Cols[:len(b.Cols)-1]
+		}
+	}
 	// Number the images of each cell in order.
 	nth := map[[3]int]int{}
 	for i := range out {
