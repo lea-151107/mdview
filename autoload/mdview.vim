@@ -12,7 +12,10 @@
 " them (or on the first while the last is below the window), so it follows
 " scrolling and is clipped at the window's edges.
 
-let s:root = expand('<sfile>:p:h:h')
+" The directory of mdview: links followed, as a plugin manager may link this
+" file into a directory it shares with other plugins (goda-pm.vim's and
+" dpp.vim's "merged"), where bin/ and go/ are not.
+let s:root = fnamemodify(resolve(expand('<sfile>:p')), ':h:h')
 " Must equal scriptVersion in go/main.go.
 let s:script_version = 7
 
@@ -56,6 +59,12 @@ function! s:init() abort
   if !s:has_goda()
     call s:warn('goda.vim is not in ''runtimepath''')
     return 0
+  endif
+  " goda.vim names goda_mdview#build() in its messages to build again (when
+  " the binary does not go with this script) if it is defined: exists() does
+  " not load an autoload script.
+  if !exists('*goda_mdview#build')
+    runtime autoload/goda_mdview.vim
   endif
   call goda#register('mdview', s:bin(), #{version: s:script_version})
   highlight default link MdviewText Normal

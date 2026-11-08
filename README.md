@@ -70,12 +70,11 @@ repo = 'Shougo/goda.vim'
 
 [[plugins]]
 repo = 'lea-151107/mdview'
-merged = false
 extAttrs.installerBuild = 'cd go && go build -o ../bin/mdview .'
 ```
 
-mdview は自分のディレクトリの中でビルドし、`bin/mdview` をそこから探します。
-ほかのプラグインとまとめる（merged）と、ビルドする場所と探す場所がずれるので、`merged = false` にします。
+ビルドは、goda.vim の名前の決まりに合わせた `goda_mdview#build()` でもできます（`:MdviewBuild` と同じ）。
+`installerBuild` の代わりに `hook_post_update = 'call goda_mdview#build()'` と書くこともできます。
 
 ### ほかの方法で入れる
 
@@ -90,8 +89,8 @@ set runtimepath+=/path/to/mdview
 ### 更新したとき
 
 mdview を更新したら、ビルドし直します（上の vim-plug・goda-pm.vim の設定では自動で行います）。
-Go のプログラムと Vim script の版が合わないときは、goda.vim が「build the binary again」と表示するので、
-`:MdviewBuild` を実行してください。
+Go のプログラムと Vim script の版が合わないときは、goda.vim が
+「build the binary again (call goda_mdview#build())」と表示するので、`:MdviewBuild` を実行してください。
 
 詳しくは `:help mdview` を見てください。
 

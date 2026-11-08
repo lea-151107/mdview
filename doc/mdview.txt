@@ -146,7 +146,7 @@ mdview と goda.vim の 2 つを Vim のプラグインとして入れます。m
 <
 プラグインマネージャーで入れるときは、更新のあとに mdview のディレクトリで
 次を実行するように設定します（vim-plug なら "do"、goda-pm.vim・dpp.vim なら
-"installerBuild"。goda-pm.vim・dpp.vim では "merged = false" にします）。 >
+"installerBuild"）。 >
 
 	cd go && go build -o ../bin/mdview .
 <
@@ -195,7 +195,10 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 
 :MdviewBuild					*:MdviewBuild*
 	bin/mdview をビルドします。動いているバイナリは止め、次の描画で
-	新しいものを起動します。
+	新しいものを起動します。関数では goda_mdview#build() です（goda.vim
+	の名前の決まりに合わせたもので、プラグインマネージャーのフックから
+	呼べます）。バイナリと Vim script の版が合わないとき、goda.vim は
+	これを呼ぶように表示します。
 
 :MdviewLog					*:MdviewLog*
 	Go 側のログ（goda#log('mdview')）を表示します。
