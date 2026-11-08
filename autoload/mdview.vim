@@ -404,6 +404,10 @@ function! mdview#apply(src, tick, results, ...) abort
   let state.results = results
   let state.tick = a:tick
   call s:draw(a:src, state)
+  " This runs from the binary's channel "call", after which Vim does not
+  " update the screen by itself: without this the new lines and images only
+  " show up at the next key press.
+  redraw
 endfunction
 
 " Build the viewer's lines from the source and the results.

@@ -122,6 +122,11 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 
 *g:mdview_update_delay*		(既定: 500)
 	編集中に描き直すまでに、入力が止まっているのを待つ時間（ミリ秒）。
+	挿入モードを <Esc> で抜けたあと、次のキーを押すまで描き直されない
+	ときは、'ttimeout' を設定してください（vimrc があると defaults.vim
+	は読まれず、<Esc> の後に続くキーを待つ間はタイマーが動きません）。 >
+		set ttimeout ttimeoutlen=100
+<
 
 *g:mdview_inline_math*		(既定: 1)
 	1 のとき、インライン数式 $…$ を x² のような 1 行のテキストに
