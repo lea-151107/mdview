@@ -304,9 +304,14 @@ function! Test_build_view_code_in_quote_and_list() abort
   let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 3, marks: [0, 0, 0]},
         \ #{kind: 'code', start: 1, end: 3, cols: [4, 4, 3]}], #{cellw: 8, cols: 20})
   call assert_equal(['│ - ╭' . repeat('─', 15), 'x', 'y'], v.lines)
-  call assert_equal([[2, 'mdview_quote_bar', '│', 1], [2, 'mdview_code_gap', '   ', 1],
-        \ [2, 'mdview_code_border', '│ ', 1]], filter(copy(v.props), 'v:val[0] == 2'))
+  call assert_equal([[2, 'mdview_quote_bar', '│', 1], [2, 'mdview_code_border', '   │ ', 1]],
+        \ filter(copy(v.props), 'v:val[0] == 2'))
   call assert_equal([[2, 3, '', 1]], v.code)
+  " Vim shows the virtual texts of a column by priority: the quotes' bars
+  " must come before the frame's.
+  for t in ['mdview_quote_bar', 'mdview_alert_note']
+    call assert_true(prop_type_get(t).priority > prop_type_get('mdview_code_border').priority, t)
+  endfor
 endfunction
 
 " A mermaid that is not drawn shows its code in a frame; one that is drawn

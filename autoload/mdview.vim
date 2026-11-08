@@ -628,8 +628,7 @@ function! s:init_code() abort
   highlight default link MdviewCodeBlock markdownCode
   highlight default link mdviewCodePlain MdviewCodeBlock
   for [name, opts] in [['mdview_code_border', #{highlight: 'MdviewCodeBorder', priority: 10}],
-        \ ['mdview_code_lang', #{highlight: 'MdviewCodeLang', priority: 20}],
-        \ ['mdview_code_gap', {}]]
+        \ ['mdview_code_lang', #{highlight: 'MdviewCodeLang', priority: 20}]]
     if empty(prop_type_get(name))
       call prop_type_add(name, opts)
     endif
@@ -729,20 +728,17 @@ function! s:code_line(v, src_lines, l, cx) abort
     call s:add_line(a:v, t, a:l, props)
     return 1
   endif
-  " Code: the prefix as virtual texts, in order (each bar its own type).
+  " Code: the prefix as virtual texts, one per bar (each its own type) with
+  " the spaces before it. Vim shows the virtual texts of a column by
+  " priority, then in the order added: the quotes' bars (20) come before the
+  " frame's (10), as they must.
   let vt = []
   let pos = 0
   for [c, type, n] in props
-    if c - 1 > pos
-      call add(vt, [1, 'mdview_code_gap', strpart(pre, pos, c - 1 - pos)])
-    endif
-    call add(vt, [1, type, strpart(pre, c - 1, n)])
+    call add(vt, [1, type, strpart(pre, pos, c - 1 + n - pos)])
     let pos = c - 1 + n
   endfor
-  if pos < len(pre)
-    call add(vt, [1, 'mdview_code_gap', strpart(pre, pos)])
-  endif
-  call add(vt, [1, 'mdview_code_border', ch.v . ' '])
+  call add(vt, [1, 'mdview_code_border', strpart(pre, pos) . ch.v . ' '])
   call s:add_line(a:v, s:expand_tabs(strpart(src, col), a:cx.ts), a:l, vt)
   let lnum = len(a:v.lines)
   if !empty(a:v.code) && a:v.code[-1][3] == r.start && a:v.code[-1][1] == lnum - 1
