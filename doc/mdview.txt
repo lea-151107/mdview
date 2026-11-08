@@ -1,5 +1,7 @@
 *mdview.txt*	mermaid・数式・画像を描く Markdown ビューア
 
+License: MIT license
+
 ==============================================================================
 目次						*mdview-contents*
 

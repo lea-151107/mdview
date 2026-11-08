@@ -60,6 +60,39 @@ function! s:warn(msg) abort
   echohl None
 endfunction
 
+" An error (an exception: of goda.vim, of the binary, of the build), line by
+" line.
+function! s:print_error(msg) abort
+  echohl ErrorMsg
+  for l in split(a:msg, "\n")
+    echomsg l
+  endfor
+  echohl None
+endfunction
+
+" Start the binary: goda.vim calls it when a request needs the plugin
+" "mdview" and no binary serves it (not started yet, stopped, or exited).
+function! s:start() abort
+  let bin = s:bin()
+  if !executable(bin)
+    throw 'mdview: ' . bin . ' does not exist yet; build it with :MdviewBuild'
+  endif
+  let plugins = goda#start(bin)
+  if index(plugins, 'mdview') < 0
+    " Stop only the binary just started (through one of its plugins).
+    if !empty(plugins)
+      call goda#stop(plugins[0])
+    endif
+    throw 'mdview: ' . bin . ' does not contain the "mdview" plugin'
+  endif
+endfunction
+
+" Say goda.vim how to start the binary; again after a build, as a start that
+" failed is not tried again until then.
+function! s:register() abort
+  call goda#register('mdview', function('s:start'), #{version: s:script_version})
+endfunction
+
 function! s:init() abort
   if get(s:, 'initialized', 0)
     return 1
@@ -80,7 +113,7 @@ function! s:init() abort
   if !exists('*goda_mdview#build')
     runtime autoload/goda_mdview.vim
   endif
-  call goda#register('mdview', s:bin(), #{version: s:script_version})
+  call s:register()
   highlight default link MdviewText Normal
   highlight default link MdviewError ErrorMsg
   highlight default link MdviewPending Comment
@@ -344,7 +377,7 @@ function! mdview#refresh(...) abort
     endif
     call goda#notify('mdview', 'render', req)
   catch
-    call s:warn(v:exception)
+    call s:print_error(v:exception)
   endtry
 endfunction
 
@@ -372,13 +405,10 @@ function! mdview#build() abort
   try
     call goda#build(#{name: 'mdview', dir: s:root . '/go', bin: s:bin()})
   catch
-    echohl ErrorMsg
-    for l in split(v:exception, "\n")
-      echomsg l
-    endfor
-    echohl None
+    call s:print_error(v:exception)
     return
   endtry
+  call s:register()
   call s:refresh_all()
 endfunction
 

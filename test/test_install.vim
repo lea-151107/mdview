@@ -15,6 +15,9 @@ function! s:fake_goda() abort
         \ 'function! goda#is_running(...) abort',
         \ '  return 0',
         \ 'endfunction',
+        \ 'function! goda#register(plugin, starter, opts = {}) abort',
+        \ '  let g:registered = [a:plugin, a:starter, a:opts]',
+        \ 'endfunction',
         \ ], d . '/autoload/goda.vim')
   return d
 endfunction
@@ -32,13 +35,20 @@ function! Test_build_with_goda() abort
     silent call mdview#build()
     call assert_equal(#{name: 'mdview', dir: s:root . '/go', bin: goda . '/bin/mdview'},
           \ get(g:, 'built', {}))
-    " A failed build is shown, not thrown.
+    " Registered again, with the start of the binary: a start that failed is
+    " tried again.
+    call assert_equal('mdview', get(g:, 'registered', [''])[0])
+    call assert_equal(v:t_func, type(g:registered[1]))
+    call assert_true(has_key(g:registered[2], 'version'))
+    " A failed build is shown, not thrown, and registers nothing.
+    unlet g:registered
     let g:build_error = "goda-mdview: go build failed:\nmain.go:1: error"
     let msgs = execute('call mdview#build()')
     call assert_match('main.go:1: error', msgs)
+    call assert_false(exists('g:registered'))
   finally
     let &runtimepath = rtp
-    unlet! g:mdview_bin g:built g:build_error
+    unlet! g:mdview_bin g:built g:build_error g:registered
     call delete(goda, 'rf')
   endtry
 endfunction

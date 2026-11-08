@@ -131,6 +131,7 @@ testdata/             確認用の Markdown
 
 ```sh
 make check   # gofmt・go mod tidy の差分・go vet・staticcheck・Go のテスト・Vim script のテスト
+             # Go のテストは、本物の Vim と goda.vim でビューアを開く試験（test/e2e.vim）も行う（-short で省く）
 make build   # bin/mdview（開発用。Vim で使うには g:mdview_bin で指す）
 echo '{"method":"goda.plugins"}' | ./bin/mdview --transport=jsonl
 ```
