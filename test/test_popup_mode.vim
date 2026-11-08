@@ -24,3 +24,22 @@ function! Test_build_view_pending() abort
   call assert_equal(['```mermaid', 'graph TD', '```', 'mdview: drawing…'], v.lines)
   call assert_equal('mdview_pending', v.props[0][1])
 endfunction
+
+" s:images_enabled(): g:mdview_images, and by default the terminal's image
+" backend (none in -es).
+function! Test_images_enabled() abort
+  let Enabled = S('images_enabled')
+  let can = has('image') && has('image_popup') && has('popupwin')
+  try
+    let g:mdview_images = 0
+    call assert_equal(0, Enabled())
+    let g:mdview_images = 1
+    call assert_equal(can ? 1 : 0, Enabled())
+    let g:mdview_images = -1
+    call assert_equal(0, Enabled())
+    unlet g:mdview_images
+    call assert_equal(0, Enabled())
+  finally
+    unlet! g:mdview_images
+  endtry
+endfunction

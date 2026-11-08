@@ -43,6 +43,12 @@ Markdown のファイルは、普段どおりのエディタで開きます。md
 （初めてならソースの行と「mdview: drawing…」）を表示し、ほかのブロックを先に
 表示します。描き直すときは、変わった行だけをビューアに書き込みます。
 
+画像を表示できない端末（sixel にも kitty にも対応していない端末）や、
+|+image| の無い Vim でも使えます。そのときは図・ディスプレイ数式・画像を描かず
+に、ソースの行のまま表示します（表のセルの画像は [alt]）。表・見出し・
+インライン数式などのテキストの表示とスクロールの追従は同じように働きます
+（|g:mdview_images|）。
+
 描画は goda.vim のプラグインとして動く Go のプログラム（bin/mdview）が行います。
 
 表						*mdview-tables*
@@ -66,9 +72,12 @@ GFM の表は、罫線（┌─┬┐ │ ├┼┤ └┴┘）で囲んだテ�
 ==============================================================================
 2. 必要なもの					*mdview-requirements*
 
-  - Vim 9.2 以降。|+image| |+image_popup| |+popupwin| |+textprop|
-  - 画像を表示できる端末（sixel または kitty）。|'imageprotocol'| と
-    |v:imagebackend| を確認してください。
+  - Vim 9.2 以降。|+textprop|
+  - 図・数式・画像を描くには、さらに次のものが要ります。無いときは
+    テキストだけで表示します（|g:mdview_images|）。
+    - |+image| |+image_popup| |+popupwin|
+    - 画像を表示できる端末（sixel または kitty）。|'imageprotocol'| と
+      |v:imagebackend| を確認してください。
   - goda.vim (https://github.com/Shougo/goda.vim)
   - ビルドに Go 1.26 以降（実行には不要）
 
@@ -154,6 +163,17 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 *g:mdview_remote*		(既定: 0)
 	1 のとき、http(s) の画像を取得して描きます（1 枚 10 秒・20MB まで）。
 	0 のときは描かずにソースの行のままにします。
+
+*g:mdview_images*		(既定: -1)
+	図（mermaid）・ディスプレイ数式・画像を描くかどうか。描かないとき
+	は、ソースの行のまま表示します。表のセルの画像は [alt] と表示し
+	ます。インライン数式は |g:mdview_inline_math| で決まります。
+	  -1	端末が画像に対応しているときだけ（|v:imagebackend| が
+		"none" でないとき）
+	   1	いつも（Vim が |+image| |+image_popup| |+popupwin| を持つとき）
+	   0	描かない
+	変えたあとは |:MdviewRefresh| で描き直します。|'imageprotocol'| を
+	変えたときは自動で描き直します。
 
 *g:mdview_table_image_rows*	(既定: 8)
 	表のセルの中の画像の高さの上限（行数）。これより高い画像は縮めて

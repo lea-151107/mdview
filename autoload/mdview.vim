@@ -47,8 +47,10 @@ function! s:init() abort
   if get(s:, 'initialized', 0)
     return 1
   endif
-  if !has('popupwin') || !has('textprop') || !has('image') || !has('image_popup')
-    call s:warn('this Vim cannot show images (needs +popupwin +textprop +image +image_popup)')
+  " Only text properties are needed; without images (s:images_enabled()) the
+  " viewer shows the source of diagrams, math and images as text.
+  if !has('textprop')
+    call s:warn('this Vim cannot run mdview (needs +textprop)')
     return 0
   endif
   if !s:has_goda()
@@ -83,6 +85,8 @@ function! s:init() abort
     autocmd WinResized,VimResized * call s:on_resized()
     autocmd ColorScheme * call s:refresh_all()
     autocmd OptionSet background call s:refresh_all()
+    " The terminal's image protocol decides whether images are drawn.
+    autocmd OptionSet imageprotocol call s:refresh_all()
     if exists('##TermResponseAll')
       autocmd TermResponseAll background,foreground call s:on_term_colors()
     endif
@@ -298,6 +302,7 @@ function! mdview#refresh(...) abort
         \ inline_math: get(g:, 'mdview_inline_math', 1) ? 1 : 0,
         \ remote: get(g:, 'mdview_remote', 0) ? 1 : 0,
         \ table_image_rows: get(g:, 'mdview_table_image_rows', 8),
+        \ no_images: s:images_enabled() ? 0 : 1,
         \ }
   let state.width = info.width
   let state.height = info.height
@@ -1339,6 +1344,22 @@ function! s:clear_now() abort
     return
   endif
   redraw!
+endfunction
+
+" Whether to draw diagrams, math and images. g:mdview_images: 1 always (when
+" Vim can show images), 0 never, -1 (default) when the terminal has an image
+" protocol (v:imagebackend is set and not "none"; it is empty before Vim
+" chose one, as in -es). Otherwise their source is shown.
+function! s:images_enabled() abort
+  if !has('image') || !has('image_popup') || !has('popupwin')
+    return 0
+  endif
+  let v = get(g:, 'mdview_images', -1)
+  if v >= 0
+    return v ? 1 : 0
+  endif
+  let backend = get(v:, 'imagebackend', '')
+  return !empty(backend) && backend !=# 'none'
 endfunction
 
 " g:mdview_clear_redraw: 1 on, 0 off, -1 (default) only with sixel, the

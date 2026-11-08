@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,36 @@ func TestRunProgressive(t *testing.T) {
 		if r.Kind == "inline_math" {
 			t.Fatalf("inline math with InlineMath 0: %+v", r)
 		}
+	}
+}
+
+func TestRunNoImages(t *testing.T) {
+	dir := t.TempDir()
+	req := request{
+		Lines: []string{"# T", "```mermaid", "graph TD", "  A-->B", "```", "$$ x $$", "a $x^2$ b ![p](p.png)",
+			"| ![c](c.png) |", "|--|"},
+		Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16}, WidthPx: 640, HeightPx: 480,
+		InlineMath: 1, NoImages: 1,
+	}
+	var calls int
+	var got []result
+	err := (&plugin{}).run(context.Background(), req, func(rs []result, final bool) error {
+		calls++
+		got = shown(rs)
+		if !final {
+			t.Error("not final")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, r := range got {
+		kinds = append(kinds, r.Kind)
+	}
+	if calls != 1 || strings.Join(kinds, ",") != "heading,inline_math,table" {
+		t.Fatalf("calls %d, kinds %v", calls, kinds)
 	}
 }
 

@@ -9,6 +9,8 @@ Vim の画像表示機能（`+image` の popup image）を使い、mermaid・デ
 - 表を罫線で囲み、列を揃えて描く。セルの書式はハイライトで表し、幅に収まらないときはセルの中で折り返す
 - 編集中も描き直す。時間のかかる図は後から出し、ほかのブロックを先に表示する
 - BMP・SVG（rsvg-convert）・http(s) の画像（`g:mdview_remote`）
+- 画像を表示できない端末（sixel・kitty に対応していない端末）や `+image` の無い Vim では、
+  図・数式・画像をソースのまま出し、表などのテキストの表示だけで読める（`g:mdview_images`）
 
 - mermaid: [dam](../dam)（pure Go）
 - 数式: [dal](../dal)（pure Go）

@@ -108,8 +108,11 @@ type request struct {
 	InlineMath   int      `json:"inline_math"`
 	Remote       int      `json:"remote"`
 	// TableImageRows caps the height of an image in a table cell, in rows.
-	TableImageRows int    `json:"table_image_rows"`
-	Callback       string `json:"callback"`
+	TableImageRows int `json:"table_image_rows"`
+	// NoImages: return no results for diagrams, math and images (the
+	// terminal cannot show images).
+	NoImages int    `json:"no_images"`
+	Callback string `json:"callback"`
 }
 
 // result is one block as returned to Vim.
@@ -333,6 +336,10 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 				}
 			}
 		case blocks.Mermaid, blocks.Math, blocks.Image:
+			if req.NoImages != 0 {
+				// Not drawn: Vim shows their source (a cell image, its [alt]).
+				continue
+			}
 			r, done := p.prepare(req, blockStyle(st, b, req.TableImageRows), b)
 			if !done {
 				r.Pending = true
