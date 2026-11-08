@@ -14,7 +14,7 @@
 
 let s:root = expand('<sfile>:p:h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 3
+let s:script_version = 4
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -75,6 +75,7 @@ function! s:init() abort
     call prop_type_add('mdview_heading', #{highlight: 'MdviewHeading', combine: v:true})
   endif
   call s:init_table()
+  call s:init_quote()
   augroup mdview_global
     autocmd!
     autocmd WinClosed * call s:close_popups(str2nr(expand('<amatch>')))
@@ -440,8 +441,15 @@ function! s:build_view(src, results, ...) abort
   let groups = []
   let headings = {}   " source line -> 1
   let inline = {}     " source line -> [[col, col_end, text]]
+  let quotes = {}     " source line -> [[col of '>' or -1, alert, title line]], outer first
   for r in a:results
-    if r.kind ==# 'heading'
+    if r.kind ==# 'quote'
+      let alert = get(r, 'alert', '')
+      for k in range(len(get(r, 'marks', [])))
+        let l = r.start + k
+        let quotes[l] = add(get(quotes, l, []), [r.marks[k], alert, k == 0 && !empty(alert)])
+      endfor
+    elseif r.kind ==# 'heading'
       for l in range(r.start, r.end)
         let headings[l] = 1
       endfor
@@ -478,14 +486,18 @@ function! s:build_view(src, results, ...) abort
   endfor
 
   let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: []}
+  let cx = #{headings: headings, inline: inline, quotes: quotes}
   let i = 1
   for g in groups
     while i < g.start && i <= n
-      call s:copy_line(v, src_lines, i, headings, inline)
+      call s:copy_line(v, src_lines, i, cx)
       let i += 1
     endwhile
     let failed = filter(copy(g.items), {_, r -> empty(get(r, 'path', '')) && empty(get(r, 'text', []))})
     let first_line = src_lines[g.start - 1]
+    " Rows that replace the lines (images, a table, messages) keep the
+    " quote's bars ("│ │ "), so they go on beside them.
+    let quote = s:quote_prefix(first_line, get(quotes, g.start, []), 1)
     if has_key(g, 'table')
       let cell_images = {}
       for r in g.items
@@ -494,17 +506,14 @@ function! s:build_view(src, results, ...) abort
           let cell_images[c] = extend(get(cell_images, c, {}), {r.cell[2]: r})
         endif
       endfor
-      call s:add_table(v, g.table, first_line, opts, cell_images)
+      call s:add_table(v, g.table, first_line, opts, cell_images, quote)
     elseif g.keep || !empty(failed)
       for k in range(g.start, g.end)
-        call s:copy_line(v, src_lines, k, headings, inline)
+        call s:copy_line(v, src_lines, k, cx)
       endfor
     else
       call extend(v.map, repeat([len(v.lines) + 1], g.end - g.start + 1))
     endif
-    " Image rows keep the quote marks of the block ("> > "), so the quote's
-    " bar goes on beside the image.
-    let quote = substitute(matchstr(first_line, '^\s*\%(>\s\?\)\+'), '\s\+$', '', '')
     let images = filter(copy(g.items), {_, r -> !empty(get(r, 'path', '')) && !has_key(r, 'cell')})
     call s:add_images(v, images, has_key(g, 'table') ? g.end : g.start, quote, opts, first_line)
     for r in g.items
@@ -512,25 +521,79 @@ function! s:build_view(src, results, ...) abort
       if !empty(get(r, 'path', '')) || (has_key(r, 'cell') && get(r, 'pending', 0))
         continue
       endif
-      let indent = repeat(' ', s:display_indent(first_line, get(r, 'indent', 0)))
+      let indent = quote[0] . repeat(' ', max([0,
+            \ s:display_indent(first_line, get(r, 'indent', 0)) - strdisplaywidth(quote[0])]))
       if !empty(get(r, 'text', []))
         for t in r.text
-          let line = empty(t) ? '' : indent . t
-          call s:add_line(v, line, r.start, empty(t) ? [] : [[1, 'mdview_text', len(line)]])
+          let line = empty(t) ? quote[0] : indent . t
+          call s:add_line(v, line, r.start, quote[1]
+                \ + (empty(t) ? [] : [[len(indent) + 1, 'mdview_text', len(t)]]))
         endfor
       else
         let pending = get(r, 'pending', 0)
-        let msg = indent . 'mdview: ' . (pending ? 'drawing…' : get(r, 'error', 'cannot draw'))
-        call s:add_line(v, msg, r.end, [[1, pending ? 'mdview_pending' : 'mdview_error', len(msg)]])
+        let msg = 'mdview: ' . (pending ? 'drawing…' : get(r, 'error', 'cannot draw'))
+        call s:add_line(v, indent . msg, r.end, quote[1]
+              \ + [[len(indent) + 1, pending ? 'mdview_pending' : 'mdview_error', len(msg)]])
       endif
     endfor
     let i = g.end + 1
   endfor
   while i <= n
-    call s:copy_line(v, src_lines, i, headings, inline)
+    call s:copy_line(v, src_lines, i, cx)
     let i += 1
   endwhile
   return v
+endfunction
+
+" ---------------------------------------------------------------------------
+" Quotes
+
+" The title of each kind of GitHub alert (g:mdview_alert_titles overrides).
+" Emoji that are two cells wide in Vim and in terminals alike (unlike ⓘ or ⚠,
+" one cell in Vim but often drawn two cells wide).
+let s:alert_titles = #{note: '📝 Note', tip: '💡 Tip', important: '❗ Important',
+      \ warning: '⚡ Warning', caution: '⛔ Caution'}
+
+function! s:init_quote() abort
+  highlight default link MdviewQuote Comment
+  highlight default link MdviewQuoteBar Comment
+  highlight default MdviewAlertNote ctermfg=Blue guifg=#4493f8
+  highlight default MdviewAlertTip ctermfg=Green guifg=#3fb950
+  highlight default MdviewAlertImportant ctermfg=Magenta guifg=#ab7df8
+  highlight default MdviewAlertWarning ctermfg=Yellow guifg=#d29922
+  highlight default MdviewAlertCaution ctermfg=Red guifg=#f85149
+  let types = [['mdview_quote', 'MdviewQuote'], ['mdview_quote_bar', 'MdviewQuoteBar']]
+  for kind in keys(s:alert_titles)
+    call add(types, ['mdview_alert_' . kind, 'MdviewAlert' . toupper(kind[0]) . kind[1:]])
+  endfor
+  for [name, hl] in types
+    if empty(prop_type_get(name))
+      call prop_type_add(name, #{highlight: hl, combine: v:true, priority: 20})
+    endif
+  endfor
+endfunction
+
+" The start of line up to its last quote mark, with the marks as bars:
+" [text, props, end]. marks: the quote marks of the line ([[col, alert,
+" title]], from s:build_view()); end is the byte after the last mark. With
+" blank, the text between the marks (a list's marker) becomes spaces, for
+" rows that go on beside the line.
+function! s:quote_prefix(line, marks, blank) abort
+  let bar = s:table_chars().v
+  let text = ''
+  let props = []
+  let pos = 0
+  for [c, alert; _] in a:marks
+    if c < pos
+      continue   " no mark on this line (-1)
+    endif
+    let text .= a:blank ? repeat(' ', s:display_indent(a:line, c) - strdisplaywidth(text))
+          \ : strpart(a:line, pos, c - pos)
+    call add(props, [len(text) + 1, empty(alert) ? 'mdview_quote_bar' : 'mdview_alert_' . alert, len(bar)])
+    let text .= bar
+    let pos = c + 1
+  endfor
+  return [text, props, pos]
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -753,11 +816,12 @@ endfunction
 function! s:add_table(v, r, first_line, opts, ...) abort
   " a:1: "row:col" -> {nth: drawn image result} of the images in cells.
   let images = a:0 ? a:1 : {}
+  " a:2: the bars of the quote it is in (s:quote_prefix()).
+  let [quote, qprops; _] = a:0 > 1 ? a:2 : ['', [], 0]
   let t = a:r.table
   let ch = s:table_chars()
   let ncols = max([len(t.align)] + map(copy(t.rows), 'len(v:val)'))
   let align = t.align + repeat([''], ncols - len(t.align))
-  let quote = substitute(matchstr(a:first_line, '^\s*\%(>\s\?\)\+'), '\s\+$', '', '')
   let indent = s:display_indent(a:first_line, get(a:r, 'indent', 0))
   let prefix = quote . repeat(' ', max([0, indent - strdisplaywidth(quote)]))
   let cells = map(copy(t.rows), {i, row -> map(copy(row),
@@ -766,8 +830,8 @@ function! s:add_table(v, r, first_line, opts, ...) abort
         \ a:opts.cols - strdisplaywidth(prefix) - (ncols * 3 + 1))
 
   let Rule = {a, b, c -> a . join(map(copy(widths), {_, w -> repeat(ch.h, w + 2)}), b) . c}
-  let Border = {line, src -> s:add_line(a:v, prefix . line, src,
-        \ [[len(prefix) + 1, 'mdview_table', len(line)], [len(prefix) + 1, 'mdview_table_border', len(line)]])}
+  let Border = {line, src -> s:add_line(a:v, prefix . line, src, qprops
+        \ + [[len(prefix) + 1, 'mdview_table', len(line)], [len(prefix) + 1, 'mdview_table_border', len(line)]])}
   let src_lines = t.lines
   let first = {}   " row index -> its first viewer line
   call Border(Rule(ch.tl, ch.tm, ch.tr), src_lines[0])
@@ -838,7 +902,7 @@ function! s:add_table(v, r, first_line, opts, ...) abort
       call add(props, [len(line) + 1, 'mdview_table_border', len(ch.v)])
       let line .= ch.v
       call insert(props, [len(prefix) + 1, 'mdview_table', len(line) - len(prefix)])
-      call s:add_line(a:v, line, src_lines[i], props)
+      call s:add_line(a:v, line, src_lines[i], qprops + props)
       if !empty(keys)
         " The images on the line are part of it, for the diff in s:draw().
         let a:v.sig[-1] .= "\x02" . join(keys, ',')
@@ -879,7 +943,8 @@ function! s:display_indent(line, col) abort
 endfunction
 
 " Lay out images side by side in rows of opts.cols columns, each row of
-" images on as many viewer lines as its tallest image.
+" images on as many viewer lines as its tallest image. quote: the bars of the
+" quote the images are in (s:quote_prefix()), at the start of each row.
 function! s:add_images(v, images, src_line, quote, opts, first_line) abort
   let rows = []   " [[image, x], ...]
   let x = 0
@@ -898,9 +963,8 @@ function! s:add_images(v, images, src_line, quote, opts, first_line) abort
     let height = max(map(copy(row), {_, it -> max([1, it[0].rows])}))
     let sig = 'img:' . join(map(copy(row), {_, it -> it[0].key . '@' . (it[1] + it[2])}), ',')
     for k in range(height)
-      call add(a:v.lines, a:quote)
-      call add(a:v.sig, sig . '#' . k . '/' . height . '|' . a:quote)
-      call add(a:v.rmap, a:src_line)
+      call s:add_line(a:v, a:quote[0], a:src_line, a:quote[1])
+      let a:v.sig[-1] = sig . '#' . k . '/' . height . '|' . a:v.sig[-1]
     endfor
     for [r, x, indent] in row
       let s:next_id += 1
@@ -921,14 +985,28 @@ function! s:add_line(v, line, src_line, props) abort
   call add(a:v.sig, a:line . "\x01" . string(a:props))
 endfunction
 
-" Copy source line l to the viewer, with its inline math replaced (and
-" highlighted) and bold when it is a heading.
-function! s:copy_line(v, src_lines, l, headings, inline) abort
+" Copy source line l to the viewer, with its quote marks drawn as bars, its
+" inline math replaced (and highlighted), and bold when it is a heading. cx:
+" {headings, inline, quotes} of s:build_view().
+function! s:copy_line(v, src_lines, l, cx) abort
   let src = a:src_lines[a:l - 1]
-  let t = ''
-  let props = []
-  let pos = 0
-  for [c, e, text] in sort(copy(get(a:inline, a:l, [])), {x, y -> x[0] - y[0]})
+  let [t, props, pos] = s:quote_prefix(src, get(a:cx.quotes, a:l, []), 0)
+  let body = -1   " where the text of a plain quote starts (shown dimmed)
+  if has_key(a:cx.quotes, a:l)
+    let [_, alert, title] = a:cx.quotes[a:l][-1]
+    if title
+      " The first line of an alert ("> [!NOTE]"): its title.
+      let text = get(get(g:, 'mdview_alert_titles', {}), alert, get(s:alert_titles, alert, alert))
+      let t .= ' '
+      call extend(props, [[len(t) + 1, 'mdview_alert_' . alert, len(text)],
+            \ [len(t) + 1, 'mdview_heading', len(text)]])
+      call add(a:v.map, len(a:v.lines) + 1)
+      call s:add_line(a:v, t . text, a:l, props)
+      return
+    endif
+    let body = empty(alert) ? len(t) : -1
+  endif
+  for [c, e, text] in sort(copy(get(a:cx.inline, a:l, [])), {x, y -> x[0] - y[0]})
     if c < pos
       continue
     endif
@@ -938,7 +1016,10 @@ function! s:copy_line(v, src_lines, l, headings, inline) abort
     let pos = e
   endfor
   let t .= strpart(src, pos)
-  if has_key(a:headings, a:l) && !empty(t)
+  if body >= 0 && len(t) > body
+    call add(props, [body + 1, 'mdview_quote', len(t) - body])
+  endif
+  if has_key(a:cx.headings, a:l) && !empty(t)
     call insert(props, [1, 'mdview_heading', len(t)])
   endif
   call add(a:v.map, len(a:v.lines) + 1)

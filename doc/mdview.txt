@@ -26,6 +26,8 @@ mdview は、Markdown を読むためのビューアを Vim の中に開きま�
   - インライン数式 $…$: x² のような 1 行のテキストに置き換えます
   - 見出し: 太字にします
   - 表: 罫線で囲み、列を揃えたテキストにします（|mdview-tables|）
+  - 引用: > を縦線にします。GitHub のアラート（> [!NOTE] など）は種類ごとの
+    色と見出しで表します（|mdview-quotes|）
 
 引用やリストの中のブロックも、その字下げの位置に描きます。文の途中の画像は、
 その行を残して下に描きます。表のセルの画像は、そのセルの中に描きます。同じ行の画像は、ビューアの幅に
@@ -68,6 +70,16 @@ GFM の表は、罫線（┌─┬┐ │ ├┼┤ └┴┘）で囲んだテ�
 の幅が変わると組み直します。
 'ambiwidth' が "double" のときは、罫線の文字が 2 桁になるため、ASCII の
 罫線（+ - |）を使います。
+
+引用						*mdview-quotes*
+引用の > を縦線（│）にします。入れ子の引用は │ │ になります。ふつうの引用は
+本文を薄い色（MdviewQuote）にします。引用の中の画像・図・表の横にも縦線を
+続けます。> の無い続きの行（lazy continuation）には縦線を付けません。
+GitHub のアラートは、引用の 1 行目が [!NOTE]・[!TIP]・[!IMPORTANT]・
+[!WARNING]・[!CAUTION] だけのものです。その行を見出し（「📝 Note」など、
+|g:mdview_alert_titles|）にし、縦線と見出しを種類ごとの色
+（MdviewAlertNote など）にします。アラートの本文は薄くしません。
+'ambiwidth' が "double" のときは、縦線に | を使います。
 
 ==============================================================================
 2. 必要なもの					*mdview-requirements*
@@ -179,6 +191,14 @@ Markdown を開いて |:Mdview| を実行すると、右にビューアが開き
 	表のセルの中の画像の高さの上限（行数）。これより高い画像は縮めて
 	描きます（|mdview-tables|）。
 
+*g:mdview_alert_titles*		(既定: {})
+	GitHub のアラートの見出し（|mdview-quotes|）。種類（note・tip・
+	important・warning・caution）から見出しへの辞書で、無い種類は既定の
+	見出しを使います。記号の幅が端末によって違うときなどに使います。 >
+		let g:mdview_alert_titles = #{note: 'Note', warning: '! Warning'}
+<	既定の見出しは「📝 Note」「💡 Tip」「❗ Important」「⚡ Warning」
+	「⛔ Caution」です。どれも端末で 2 桁の絵文字です。
+
 *g:mdview_fenced_languages*	(既定: [])
 	ビューアのコードブロックを色付けする言語。書き方は
 	|g:markdown_fenced_languages| と同じです（例: ['go', 'sh=bash']）。
@@ -265,6 +285,13 @@ MdviewStrike	表のセルの取消線（既定: 取消線）
 MdviewUnderline	表のセルの下線（既定: 下線）
 MdviewLink	表のセルのリンク（既定: Underlined）
 MdviewImage	表のセルの画像の代替テキスト（既定: Special）
+MdviewQuote	ふつうの引用の本文（既定: Comment）
+MdviewQuoteBar	ふつうの引用の縦線（既定: Comment）
+MdviewAlertNote		アラートの縦線と見出し（既定: 青）
+MdviewAlertTip		（既定: 緑）
+MdviewAlertImportant	（既定: 紫）
+MdviewAlertWarning	（既定: 黄）
+MdviewAlertCaution	（既定: 赤）
 
 ==============================================================================
 8. 制限						*mdview-limitations*

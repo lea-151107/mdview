@@ -13,7 +13,9 @@
     "```mermaid",
     "graph TD",
     "  A --\u003e",
-    "```"
+    "```",
+    "\u003e [!TIP]",
+    "\u003e - \u003e t"
   ],
   "results": [
     {
@@ -125,10 +127,20 @@
       ]
     },
     {
+      "kind": "quote",
+      "start": 10,
+      "end": 10,
+      "col": 0,
+      "col_end": 0,
+      "marks": [
+        0
+      ]
+    },
+    {
       "kind": "image",
       "start": 10,
       "end": 10,
-      "key": "k6",
+      "key": "k7",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -144,6 +156,28 @@
       "error": "error",
       "col": 0,
       "col_end": 0
+    },
+    {
+      "kind": "quote",
+      "start": 15,
+      "end": 16,
+      "col": 0,
+      "col_end": 0,
+      "marks": [
+        0,
+        0
+      ],
+      "alert": "tip"
+    },
+    {
+      "kind": "quote",
+      "start": 16,
+      "end": 16,
+      "col": 0,
+      "col_end": 0,
+      "marks": [
+        4
+      ]
     }
   ]
 }

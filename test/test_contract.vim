@@ -12,11 +12,13 @@ function! Test_contract() abort
         \ 'text x² and ![a](a.png) here', '', '',
         \ '┌────┬──────┐', '│    │ cell │', '│    │      │', '├────┼──────┤', '│ y  │    b │',
         \ '└────┴──────┘',
-        \ '>', '>',
+        \ '│', '│',
         \ '```mermaid', 'graph TD', '  A -->', '```', 'mdview: error',
+        \ '│ 💡 Tip', '│ - │ t',
         \ ], v.lines)
-  call assert_equal(['mdview_bold', 'mdview_error', 'mdview_heading',
-        \ 'mdview_math', 'mdview_table', 'mdview_table_border', 'mdview_table_header'],
+  call assert_equal(['mdview_alert_tip', 'mdview_bold', 'mdview_error', 'mdview_heading',
+        \ 'mdview_math', 'mdview_quote', 'mdview_quote_bar',
+        \ 'mdview_table', 'mdview_table_border', 'mdview_table_header'],
         \ uniq(sort(map(copy(v.props), 'v:val[1]'))))
   " mermaid, the image in text, the one in a table cell (inside its
   " borders), the one in a quote.

@@ -247,6 +247,7 @@ func TestContract(t *testing.T) {
 		"| ![a](a.png) | **cell** |", "|:--|--:|", "| $y$ | b |",
 		"> ![a](a.png)",
 		"```mermaid", "graph TD", "  A -->", "```",
+		"> [!TIP]", "> - > t",
 	}
 	req := request{Lines: lines, Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16},
 		WidthPx: 640, HeightPx: 480, InlineMath: 1}

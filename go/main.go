@@ -32,7 +32,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 3
+const scriptVersion = 4
 
 const blockTimeout = 15 * time.Second
 
@@ -142,6 +142,9 @@ type result struct {
 	Cell []int `json:"cell,omitempty"`
 	// Table: the cells of a table, laid out by Vim.
 	Table *tableResult `json:"table,omitempty"`
+	// Marks: the column of a quote's '>' on each of its lines, or -1.
+	Marks []int  `json:"marks,omitempty"`
+	Alert string `json:"alert,omitempty"`
 }
 
 // tableResult is a table for Vim: rows[row][column] is a list of
@@ -325,6 +328,8 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 		switch b.Kind {
 		case blocks.Heading:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+		case blocks.Quote:
+			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Marks: b.Marks, Alert: b.Alert}
 		case blocks.Table:
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Indent: b.Indent,
 				Table: tableOf(b.Table, req.InlineMath != 0)}

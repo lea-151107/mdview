@@ -48,10 +48,12 @@ endfunction
 function! Test_build_view_quote_and_tab_indent() abort
   let src = Src(['> ![a](a.png)', "-\t![b](b.png)"])
   let r = #{kind: 'image', key: 'k', path: '/p', w: 8, h: 32, rows: 2}
-  let v = S('build_view')(src, [extend(copy(r), #{start: 1, end: 1, indent: 2}),
+  let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 1, marks: [0]},
+        \ extend(copy(r), #{start: 1, end: 1, indent: 2}),
         \ extend(copy(r), #{start: 2, end: 2, indent: 2})])
-  " Image rows inside a quote keep its mark; the tab counts as display columns.
-  call assert_equal(['>', '>', '', ''], v.lines)
+  " Image rows inside a quote keep its bar; the tab counts as display columns.
+  call assert_equal(['│', '│', '', ''], v.lines)
+  call assert_equal([[1, 'mdview_quote_bar', 3, 1], [2, 'mdview_quote_bar', 3, 1]], v.props)
   call assert_equal([2, &tabstop], map(copy(v.anchors), 'v:val.indent'))
 endfunction
 
@@ -150,8 +152,10 @@ endfunction
 function! Test_build_view_table_line_break_and_quote() abort
   let src = Src(['> | a |', '> |---|', '> | x<br>y |'])
   let r = s:table(1, 3, [''], [1, 3], [[[['a', '']]], [[['x', ''], ["\n", ''], ['y', '']]]], 2)
-  let v = S('build_view')(src, [r])
-  call assert_equal(['> ┌───┐', '> │ a │', '> ├───┤', '> │ x │', '> │ y │', '> └───┘'], v.lines)
+  let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 3, marks: [0, 0, 0]}, r])
+  call assert_equal(['│ ┌───┐', '│ │ a │', '│ ├───┤', '│ │ x │', '│ │ y │', '│ └───┘'], v.lines)
+  call assert_equal(repeat([['mdview_quote_bar', 3, 1]], 6),
+        \ map(filter(copy(v.props), 'v:val[3] == 1 && v:val[1] =~# "quote"'), 'v:val[1:3]'))
   call assert_equal([2, 3, 4], v.map)
 endfunction
 
@@ -174,16 +178,17 @@ function! Test_build_view_table_image_in_cell() abort
   " p is 5 cells wide and 2 rows; q 3 cells and 1 row.
   let p = #{kind: 'image', start: 3, end: 3, keep: 1, key: 'kp', path: '/p', w: 40, h: 32, rows: 2, cell: [1, 1, 0]}
   let q = #{kind: 'image', start: 3, end: 3, keep: 1, key: 'kq', path: '/q', w: 24, h: 16, rows: 1, cell: [1, 1, 1]}
-  let v = S('build_view')(src, [r, p, q], #{cellw: 8, cols: 80})
+  let quote = #{kind: 'quote', start: 1, end: 3, marks: [0, 0, 0]}
+  let v = S('build_view')(src, [quote, r, p, q], #{cellw: 8, cols: 80})
   call assert_equal([
-        \ '> ┌───┬───────┐',
-        \ '> │ a │ b     │',
-        \ '> ├───┼───────┤',
-        \ '> │ x │       │',
-        \ '> │   │       │',
-        \ '> │   │ t     │',
-        \ '> │   │       │',
-        \ '> └───┴───────┘',
+        \ '│ ┌───┬───────┐',
+        \ '│ │ a │ b     │',
+        \ '│ ├───┼───────┤',
+        \ '│ │ x │       │',
+        \ '│ │   │       │',
+        \ '│ │   │ t     │',
+        \ '│ │   │       │',
+        \ '│ └───┴───────┘',
         \ 'z'], v.lines)
   " The images stack in the cell: the anchors are at its column.
   call assert_equal([[4, 5, 8, 'kp'], [7, 7, 8, 'kq']],
@@ -191,7 +196,7 @@ function! Test_build_view_table_image_in_cell() abort
   call assert_equal([2, 3, 4, 9], v.map)
   " An image that changes changes its lines.
   let q2 = extend(copy(q), #{key: 'kq2'})
-  let v2 = S('build_view')(src, [r, p, q2], #{cellw: 8, cols: 80})
+  let v2 = S('build_view')(src, [quote, r, p, q2], #{cellw: 8, cols: 80})
   call assert_equal(v.sig[:5], v2.sig[:5])
   call assert_notequal(v.sig[6], v2.sig[6])
 endfunction
@@ -220,4 +225,58 @@ function! Test_build_view_table_image_pending_shows_alt() abort
   let v = S('build_view')(src, [r, p], #{prev: {'image:1:0:0:0': old}})
   call assert_equal(['┌───┐', '│   │', '├───┤', '└───┘'], v.lines)
   call assert_equal(['old'], map(copy(v.anchors), 'v:val.key'))
+endfunction
+
+" Quotes: the '>' become bars, the text of a plain quote is dimmed, and an
+" alert's first line becomes its title.
+function! Test_build_view_quote() abort
+  let src = Src(['> a', '>', '> > b', 'lazy', '- > c', '', '> [!NOTE]', '> d'])
+  let v = S('build_view')(src, [
+        \ #{kind: 'quote', start: 1, end: 4, marks: [0, 0, 0, -1]},
+        \ #{kind: 'quote', start: 3, end: 4, marks: [2, -1]},
+        \ #{kind: 'quote', start: 5, end: 5, marks: [2]},
+        \ #{kind: 'quote', start: 7, end: 8, marks: [0, 0], alert: 'note'}])
+  call assert_equal(['│ a', '│', '│ │ b', 'lazy', '- │ c', '', '│ 📝 Note', '│ d'], v.lines)
+  call assert_equal(range(1, 8), v.map)
+  let props = {}
+  for [l, type, len, col] in v.props
+    let props[l] = add(get(props, l, []), [col, type, len])
+  endfor
+  call assert_equal([[1, 'mdview_quote_bar', 3], [4, 'mdview_quote', 2]], props[1])
+  call assert_equal([[1, 'mdview_quote_bar', 3]], props[2])
+  call assert_equal([[1, 'mdview_quote_bar', 3], [5, 'mdview_quote_bar', 3], [8, 'mdview_quote', 2]], props[3])
+  call assert_equal([[1, 'mdview_quote', 4]], props[4])
+  call assert_equal([[3, 'mdview_quote_bar', 3], [6, 'mdview_quote', 2]], props[5])
+  call assert_equal([[1, 'mdview_alert_note', 3], [5, 'mdview_alert_note', len('📝 Note')],
+        \ [5, 'mdview_heading', len('📝 Note')]], props[7])
+  " The text of an alert is not dimmed.
+  call assert_equal([[1, 'mdview_alert_note', 3]], props[8])
+  " The titles can be changed.
+  let g:mdview_alert_titles = #{note: 'NOTE'}
+  try
+    call assert_equal('│ NOTE', S('build_view')(src, [#{kind: 'quote', start: 7, end: 8,
+          \ marks: [0, 0], alert: 'note'}]).lines[6])
+  finally
+    unlet g:mdview_alert_titles
+  endtry
+endfunction
+
+function! Test_build_view_quote_ambiwidth_double() abort
+  let src = Src(['> a'])
+  set ambiwidth=double
+  try
+    let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 1, marks: [0]}])
+  finally
+    set ambiwidth=single
+  endtry
+  call assert_equal(['| a'], v.lines)
+endfunction
+
+" A mermaid in a list in a quote: its rows keep the bar, not the list's mark.
+function! Test_build_view_quote_list_image() abort
+  let src = Src(['- > ```mermaid', '  > graph TD', '  > ```'])
+  let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 3, marks: [2, 2, 2]},
+        \ #{kind: 'mermaid', start: 1, end: 3, key: 'k', path: '/p', w: 8, h: 32, rows: 2, indent: 4}])
+  call assert_equal(['  │', '  │'], v.lines[:1])
+  call assert_equal([[1, 2, 4]], map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
 endfunction

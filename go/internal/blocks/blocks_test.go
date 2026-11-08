@@ -197,6 +197,16 @@ func FuzzParseRanges(f *testing.F) {
 					}
 				}
 			}
+			if b.Kind == Quote {
+				if len(b.Marks) != b.End-b.Start+1 {
+					t.Fatalf("bad quote marks %+v", b)
+				}
+				for i, c := range b.Marks {
+					if l := lines[b.Start-1+i]; c >= len(l) || (c >= 0 && l[c] != '>') {
+						t.Fatalf("bad quote mark %d in %q (%+v)", c, l, b)
+					}
+				}
+			}
 			if b.Kind == InlineMath {
 				l := lines[b.Start-1]
 				if b.Col < 0 || b.Col >= b.ColEnd || b.ColEnd > len(l) || l[b.Col] != '$' {
@@ -334,5 +344,42 @@ func TestTableCellImages(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spans, []string{"[1]", "[2]", "[three]", "[4]"}) {
 		t.Fatalf("image spans %v", spans)
+	}
+}
+
+func TestQuote(t *testing.T) {
+	type q struct {
+		Start, End int
+		Marks      []int
+		Alert      string
+	}
+	cases := []struct {
+		name string
+		doc  string
+		want []q
+	}{
+		{"plain", "a\n\n> one\n> two\n\nb", []q{{3, 4, []int{0, 0}, ""}}},
+		{"nested", "> a\n>\n> > b\n> > c", []q{{1, 4, []int{0, 0, 0, 0}, ""}, {3, 4, []int{2, 2}, ""}}},
+		{"indented and in a list", "  > a\n\n- > b\n  > c", []q{{1, 1, []int{2}, ""}, {3, 4, []int{2, 2}, ""}}},
+		{"lazy line", "> a\nb\n> c", []q{{1, 3, []int{0, -1, 0}, ""}}},
+		{"marker-only last line", "> a\n>", []q{{1, 2, []int{0, 0}, ""}}},
+		{"tab after the mark", ">\ta\n>\tb", []q{{1, 2, []int{0, 0}, ""}}},
+		{"code inside", "> ```\n> > x\n> ```", []q{{1, 3, []int{0, 0, 0}, ""}}},
+		{"code outside", "```\n> x\n```", nil},
+		{"alert", "> [!NOTE]\n> text", []q{{1, 2, []int{0, 0}, "note"}}},
+		{"alert, any case", ">[!Warning]  \n> text", []q{{1, 2, []int{0, 0}, "warning"}}},
+		{"alert only alone on its line", "> [!NOTE] text", []q{{1, 1, []int{0}, ""}}},
+		{"unknown alert", "> [!FOO]\n> text", []q{{1, 2, []int{0, 0}, ""}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got []q
+			for _, b := range ofKind(Parse(strings.Split(c.doc, "\n")), Quote) {
+				got = append(got, q{b.Start, b.End, b.Marks, b.Alert})
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got\n%#v\nwant\n%#v", got, c.want)
+			}
+		})
 	}
 }

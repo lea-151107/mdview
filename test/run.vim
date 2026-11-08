@@ -27,6 +27,7 @@ for s:t in ['mdview_anchor', 'mdview_anchor_end', 'mdview_text', 'mdview_error',
   endif
 endfor
 call S('init_table')()
+call S('init_quote')()
 
 " A source buffer and a viewer for it, with the state mdview#open() makes.
 function! Viewer(lines) abort

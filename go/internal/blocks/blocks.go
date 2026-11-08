@@ -17,6 +17,7 @@ import (
 	extast "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // Kind is what a block is.
@@ -29,6 +30,7 @@ const (
 	Heading    Kind = "heading"     // not drawn; its lines are shown in bold
 	InlineMath Kind = "inline_math" // $…$ inside a line, shown as text
 	Table      Kind = "table"       // a GFM table, laid out by Vim from Block.Table
+	Quote      Kind = "quote"       // a blockquote, its '>' drawn as bars by Vim
 )
 
 // Block is one part of the document. Start and End are 1-based line
@@ -42,6 +44,10 @@ const (
 // For Table, Start..End are the table's lines (header to last row), replaced
 // by the table Vim draws. Images in its cells are Image blocks (Keep) of
 // their rows.
+//
+// For Quote, Start..End are the quote's lines (blocks inside it are blocks
+// of their own); Marks has the 0-based byte column of its '>' on each of
+// them, or -1 for a line without one (a lazy continuation line).
 //
 // For InlineMath, Start == End is the line, and Col and ColEnd are the
 // 0-based byte range of the $…$ in that line.
@@ -59,6 +65,8 @@ type Block struct {
 	Width  int        // Image: width in pixels from <img width="…">, 0 if none
 	Table  *TableData // Table: its cells
 	Cell   *CellPos   // Image: the table cell it is in, or nil
+	Marks  []int      // Quote: column of its '>' on each line, or -1
+	Alert  string     // Quote: a GitHub alert's kind ("note", "tip", …), or ""
 }
 
 // CellPos is where an image in a table is: the row (0 is the header) and
@@ -78,7 +86,8 @@ var (
 
 var md = goldmark.New(
 	goldmark.WithExtensions(extension.GFM, mathExtension{}),
-	goldmark.WithParserOptions(parser.WithAttribute()),
+	goldmark.WithParserOptions(parser.WithAttribute(),
+		parser.WithBlockParsers(util.Prioritized(quoteParser{}, 799))),
 )
 
 // doc is a parsed document with a map from byte offsets to lines.
@@ -114,7 +123,9 @@ func Parse(lines []string) []Block {
 	if len(lines) == 0 {
 		return nil
 	}
-	root := md.Parser().Parse(text.NewReader(d.src))
+	pc := parser.NewContext()
+	root := md.Parser().Parse(text.NewReader(d.src), parser.WithContext(pc))
+	marks, _ := pc.Get(quoteMarks).(map[*ast.Blockquote][]int)
 
 	var out []Block
 	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -148,6 +159,10 @@ func Parse(lines []string) []Block {
 			return ast.WalkSkipChildren, nil
 		case *ast.RawHTML:
 			out = append(out, d.htmlImages(n.Segments, false, text.Segment{}, n)...)
+		case *ast.Blockquote:
+			if blk, ok := d.quote(n, marks[n]); ok {
+				out = append(out, blk)
+			}
 		case *extast.Table:
 			if blk, ok := d.table(n); ok {
 				out = append(out, blk)
