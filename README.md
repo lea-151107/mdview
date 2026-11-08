@@ -20,21 +20,78 @@ Vim の画像表示機能（`+image` の popup image）を使い、mermaid・デ
 - 数式: [dal](https://github.com/lea-151107/dal)（pure Go）
 - Vim との連携: [goda.vim](https://github.com/Shougo/goda.vim)
 
+## 必要なもの
+
+- Vim 9.2 以降（`+textprop`）
+- 図・数式・画像を描くには、さらに `+image`・`+image_popup`・`+popupwin` と、sixel か kitty の画像を表示できる端末。
+  無いときはテキストだけで表示します（`g:mdview_images`）
+- [goda.vim](https://github.com/Shougo/goda.vim)。Go のプログラムと Vim をつなぐ Vim のプラグインです
+- ビルドに Go 1.26 以降と、ネットワーク（初めてのビルドで dal・dam などのモジュールを取ってくるため）。
+  実行には Go は要りません
+
 ## 導入
 
-mdview と goda.vim を clone します。dal と dam は、ビルドのときに Go が取ってきます。
+mdview と goda.vim の 2 つを Vim のプラグインとして入れ、mdview の Go のプログラム（`bin/mdview`）を
+ビルドします。dal と dam は、ビルドのときに Go が取ってきます。
+
+### Vim のパッケージで入れる
 
 ```sh
+mkdir -p ~/.vim/pack/plugins/start
+cd ~/.vim/pack/plugins/start
 git clone https://github.com/lea-151107/mdview
 git clone https://github.com/Shougo/goda.vim
 ```
+
+Vim を起動して、次を実行します。
+
+```vim
+:MdviewBuild
+:helptags ALL
+```
+
+`:MdviewBuild` は `mdview/go` で `go build` し、`mdview/bin/mdview` を作ります。
+シェルから `cd mdview/go && go build -o ../bin/mdview .` を実行しても同じです。
+
+### vim-plug で入れる
+
+```vim
+Plug 'Shougo/goda.vim'
+Plug 'lea-151107/mdview', { 'do': 'cd go && go build -o ../bin/mdview .' }
+```
+
+`:PlugInstall` と `:PlugUpdate` のあとに、mdview のディレクトリでビルドします。
+
+### goda-pm.vim・dpp.vim で入れる
+
+```toml
+[[plugins]]
+repo = 'Shougo/goda.vim'
+
+[[plugins]]
+repo = 'lea-151107/mdview'
+merged = false
+extAttrs.installerBuild = 'cd go && go build -o ../bin/mdview .'
+```
+
+mdview は自分のディレクトリの中でビルドし、`bin/mdview` をそこから探します。
+ほかのプラグインとまとめる（merged）と、ビルドする場所と探す場所がずれるので、`merged = false` にします。
+
+### ほかの方法で入れる
+
+goda.vim と mdview の 2 つを `'runtimepath'` に入れ、mdview を入れたあと（更新したあとも）に
+`:MdviewBuild` を実行します。
 
 ```vim
 set runtimepath+=/path/to/goda.vim
 set runtimepath+=/path/to/mdview
 ```
 
-Vim で `:MdviewBuild` を実行します（または `cd go && go build -o ../bin/mdview .`）。
+### 更新したとき
+
+mdview を更新したら、ビルドし直します（上の vim-plug・goda-pm.vim の設定では自動で行います）。
+Go のプログラムと Vim script の版が合わないときは、goda.vim が「build the binary again」と表示するので、
+`:MdviewBuild` を実行してください。
 
 詳しくは `:help mdview` を見てください。
 

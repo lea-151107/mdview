@@ -135,22 +135,25 @@ GitHub のアラートは、引用の 1 行目が [!NOTE]・[!TIP]・[!IMPORTANT
 ==============================================================================
 3. 導入						*mdview-install*
 
-mdview と goda.vim を clone します。mermaid と数式を描く dal と dam は、
-ビルドのときに Go が取ってきます。 >
+mdview と goda.vim の 2 つを Vim のプラグインとして入れます。mermaid と数式
+を描く dal と dam は、ビルドのときに Go が取ってきます。Vim のパッケージで
+入れる例: >
 
+	mkdir -p ~/.vim/pack/plugins/start
+	cd ~/.vim/pack/plugins/start
 	git clone https://github.com/lea-151107/mdview
 	git clone https://github.com/Shougo/goda.vim
 <
-goda.vim と mdview を 'runtimepath' に入れます。 >
+プラグインマネージャーで入れるときは、更新のあとに mdview のディレクトリで
+次を実行するように設定します（vim-plug なら "do"、goda-pm.vim・dpp.vim なら
+"installerBuild"。goda-pm.vim・dpp.vim では "merged = false" にします）。 >
 
-	set runtimepath+=/path/to/goda.vim
-	set runtimepath+=/path/to/mdview
+	cd go && go build -o ../bin/mdview .
 <
-Vim を起動して |:MdviewBuild| を実行します（mdview/go で go build し、
-mdview/bin/mdview を作ります）。シェルからでも同じです。 >
+手で入れたときは、Vim を起動して |:MdviewBuild| を実行します（mdview/go で
+go build し、mdview/bin/mdview を作ります）。mdview を更新したときも、
+ビルドし直します。
 
-	cd mdview/go && go build -o ../bin/mdview .
-<
 キーに割り当てる例: >
 
 	autocmd FileType markdown nnoremap <buffer> <Leader>p <Cmd>Mdview<CR>
