@@ -1,5 +1,8 @@
 {
   "lines": [
+    "---",
+    "title: T",
+    "---",
     "# Title",
     "```mermaid",
     "graph TD",
@@ -26,18 +29,51 @@
   ],
   "results": [
     {
-      "kind": "heading",
+      "kind": "table",
       "start": 1,
-      "end": 1,
+      "end": 3,
+      "col": 0,
+      "col_end": 0,
+      "table": {
+        "align": [
+          "",
+          ""
+        ],
+        "rows": [
+          [
+            [
+              [
+                "title",
+                "b"
+              ]
+            ],
+            [
+              [
+                "T",
+                ""
+              ]
+            ]
+          ]
+        ],
+        "lines": [
+          2
+        ],
+        "no_header": true
+      }
+    },
+    {
+      "kind": "heading",
+      "start": 4,
+      "end": 4,
       "col": 0,
       "col_end": 0,
       "id": "title"
     },
     {
       "kind": "mermaid",
-      "start": 2,
-      "end": 5,
-      "key": "k1",
+      "start": 5,
+      "end": 8,
+      "key": "k2",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -47,8 +83,8 @@
     },
     {
       "kind": "code",
-      "start": 2,
-      "end": 5,
+      "start": 5,
+      "end": 8,
       "col": 0,
       "col_end": 0,
       "lang": "mermaid",
@@ -62,42 +98,42 @@
     },
     {
       "kind": "para",
-      "start": 6,
-      "end": 6,
+      "start": 9,
+      "end": 9,
       "col": 0,
       "col_end": 0,
       "spans": [
         [
           "text ",
           "",
-          6
+          9
         ],
         [
           "x²",
           "math",
-          6
+          9
         ],
         [
           " and ",
           "",
-          6
+          9
         ],
         [
           "[a]",
           "image",
-          6
+          9
         ],
         [
           " here",
           "",
-          6
+          9
         ]
       ]
     },
     {
       "kind": "inline_math",
-      "start": 6,
-      "end": 6,
+      "start": 9,
+      "end": 9,
       "text": [
         "x²"
       ],
@@ -106,9 +142,9 @@
     },
     {
       "kind": "image",
-      "start": 6,
-      "end": 6,
-      "key": "k5",
+      "start": 9,
+      "end": 9,
+      "key": "k6",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -119,8 +155,8 @@
     },
     {
       "kind": "table",
-      "start": 7,
-      "end": 9,
+      "start": 10,
+      "end": 12,
       "col": 0,
       "col_end": 0,
       "table": {
@@ -159,16 +195,16 @@
           ]
         ],
         "lines": [
-          7,
-          9
+          10,
+          12
         ]
       }
     },
     {
       "kind": "image",
-      "start": 7,
-      "end": 7,
-      "key": "k7",
+      "start": 10,
+      "end": 10,
+      "key": "k8",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -185,8 +221,8 @@
     },
     {
       "kind": "quote",
-      "start": 10,
-      "end": 10,
+      "start": 13,
+      "end": 13,
       "col": 0,
       "col_end": 0,
       "marks": [
@@ -195,23 +231,23 @@
     },
     {
       "kind": "para",
-      "start": 10,
-      "end": 10,
+      "start": 13,
+      "end": 13,
       "col": 2,
       "col_end": 0,
       "spans": [
         [
           "[a]",
           "image",
-          10
+          13
         ]
       ]
     },
     {
       "kind": "image",
-      "start": 10,
-      "end": 10,
-      "key": "k10",
+      "start": 13,
+      "end": 13,
+      "key": "k11",
       "path": "/x",
       "w": 16,
       "h": 32,
@@ -222,16 +258,16 @@
     },
     {
       "kind": "mermaid",
-      "start": 11,
-      "end": 14,
+      "start": 14,
+      "end": 17,
       "error": "error",
       "col": 0,
       "col_end": 0
     },
     {
       "kind": "code",
-      "start": 11,
-      "end": 14,
+      "start": 14,
+      "end": 17,
       "col": 0,
       "col_end": 0,
       "lang": "mermaid",
@@ -245,8 +281,8 @@
     },
     {
       "kind": "quote",
-      "start": 15,
-      "end": 16,
+      "start": 18,
+      "end": 19,
       "col": 0,
       "col_end": 0,
       "marks": [
@@ -257,22 +293,22 @@
     },
     {
       "kind": "para",
-      "start": 15,
-      "end": 15,
+      "start": 18,
+      "end": 18,
       "col": 2,
       "col_end": 0,
       "spans": [
         [
           "[!TIP]",
           "",
-          15
+          18
         ]
       ]
     },
     {
       "kind": "quote",
-      "start": 16,
-      "end": 16,
+      "start": 19,
+      "end": 19,
       "col": 0,
       "col_end": 0,
       "marks": [
@@ -281,22 +317,22 @@
     },
     {
       "kind": "para",
-      "start": 16,
-      "end": 16,
+      "start": 19,
+      "end": 19,
       "col": 6,
       "col_end": 0,
       "spans": [
         [
           "t",
           "",
-          16
+          19
         ]
       ]
     },
     {
       "kind": "code",
-      "start": 17,
-      "end": 19,
+      "start": 20,
+      "end": 22,
       "col": 0,
       "col_end": 0,
       "lang": "go",
@@ -309,8 +345,8 @@
     },
     {
       "kind": "quote",
-      "start": 20,
-      "end": 20,
+      "start": 23,
+      "end": 23,
       "col": 0,
       "col_end": 0,
       "marks": [
@@ -319,46 +355,46 @@
     },
     {
       "kind": "rule",
-      "start": 20,
-      "end": 20,
+      "start": 23,
+      "end": 23,
       "col": 2,
       "col_end": 0
     },
     {
       "kind": "para",
-      "start": 21,
-      "end": 21,
+      "start": 24,
+      "end": 24,
       "col": 0,
       "col_end": 0,
       "spans": [
         [
           "see ",
           "",
-          21
+          24
         ],
         [
           "the title",
           "link",
-          21,
+          24,
           "#title"
         ],
         [
           " and ",
           "",
-          21
+          24
         ],
         [
           "https://x.y",
           "link",
-          21,
+          24,
           "https://x.y"
         ]
       ]
     },
     {
       "kind": "table",
-      "start": 22,
-      "end": 23,
+      "start": 25,
+      "end": 26,
       "col": 0,
       "col_end": 0,
       "table": {
@@ -378,7 +414,7 @@
           ]
         ],
         "lines": [
-          22
+          25
         ]
       }
     }

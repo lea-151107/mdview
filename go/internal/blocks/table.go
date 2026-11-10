@@ -29,6 +29,8 @@ type TableData struct {
 	Align []string   // per column: "l", "c", "r", or "" (none)
 	Rows  [][][]Span // [row][column]; Rows[0] is the header
 	Lines []int      // the source line of each row (1-based)
+	// NoHeader: Rows[0] is a row like the others (the front matter's).
+	NoHeader bool
 }
 
 var htmlTag = regexp.MustCompile(`(?i)^<\s*(/?)\s*([a-z][a-z0-9]*)\b[^>]*?(/?)\s*>$`)

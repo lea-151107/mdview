@@ -564,3 +564,145 @@ func TestLinkURL(t *testing.T) {
 		})
 	}
 }
+
+// cellText returns a cell's spans as text, with "|" for a line break.
+func cellText(c []Span) string {
+	var b strings.Builder
+	for _, s := range c {
+		if s.Text == "\n" {
+			b.WriteString("|")
+		} else {
+			b.WriteString(s.Text)
+		}
+	}
+	return b.String()
+}
+
+func TestFrontMatter(t *testing.T) {
+	doc := strings.Split(`---
+title: "設計 \"メモ\""
+date: 2026-11-11 # the day
+# a comment
+'quoted key': 'it''s'
+empty:
+url: https://example.com/a
+tags:
+- vim
+  - nested
+meta:
+  author: lea
+
+  deep:
+    x: 1
+lit: |
+  line 1
+  line 2
+fold: >-
+  a
+  b
+
+  c
+  日本
+  語
+---
+# Heading
+---`, "\n")
+	bs := Parse(doc)
+	tables := ofKind(bs, Table)
+	if len(tables) != 1 || tables[0].Start != 1 || tables[0].End != 26 || !tables[0].Table.NoHeader {
+		t.Fatalf("tables: %#v", tables)
+	}
+	tb := tables[0].Table
+	var got [][]string
+	for _, r := range tb.Rows {
+		got = append(got, []string{cellText(r[0]), cellText(r[1])})
+	}
+	nb := " "
+	want := [][]string{
+		{"title", `設計 "メモ"`},
+		{"date", "2026-11-11"},
+		{"quoted key", "it's"},
+		{"empty", ""},
+		{"url", "https://example.com/a"},
+		{"tags", "- vim|" + nb + nb + "- nested"},
+		{"meta", "author: lea||deep:|" + nb + nb + "x: 1"},
+		{"lit", "line 1|line 2"},
+		{"fold", "a b|c 日本語"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+	if !reflect.DeepEqual(tb.Lines, []int{2, 3, 5, 6, 7, 8, 11, 16, 19}) {
+		t.Fatalf("lines: %v", tb.Lines)
+	}
+	if k := tb.Rows[0][0][0]; k.Style != "b" || k.Line != 2 {
+		t.Fatalf("key: %#v", k)
+	}
+	if u := tb.Rows[4][1][0]; u.Style != "link" || u.URL != "https://example.com/a" {
+		t.Fatalf("url: %#v", u)
+	}
+	// Nothing in it is Markdown; the heading after it is the first, and
+	// the "---" after it a rule.
+	hs := ofKind(bs, Heading)
+	if len(hs) != 1 || hs[0].Start != 27 || hs[0].ID != "heading" {
+		t.Fatalf("headings: %#v", hs)
+	}
+	if rs := ofKind(bs, Rule); len(rs) != 1 || rs[0].Start != 28 {
+		t.Fatalf("rules: %#v", rs)
+	}
+	if len(ofKind(bs, Para)) != 0 {
+		t.Fatalf("paras: %#v", ofKind(bs, Para))
+	}
+}
+
+func TestFrontMatterTOML(t *testing.T) {
+	doc := strings.Split(`+++
+title = "T" # c
+draft = false
+tags = [
+  "a",
+  "b # not a comment",
+]
+[params]
+  author = 'lea'
+[[menu.main]]
+name = "x"
++++
+text`, "\n")
+	tables := ofKind(Parse(doc), Table)
+	if len(tables) != 1 || tables[0].End != 12 {
+		t.Fatalf("tables: %#v", tables)
+	}
+	var got [][]string
+	for _, r := range tables[0].Table.Rows {
+		got = append(got, []string{cellText(r[0]), cellText(r[1])})
+	}
+	nb := " "
+	want := [][]string{
+		{"title", "T"},
+		{"draft", "false"},
+		{"tags", "[|" + nb + nb + `"a",|` + nb + nb + `"b # not a comment",|]`},
+		{"params.author", "lea"},
+		{"menu.main.name", "x"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestNotFrontMatter(t *testing.T) {
+	for _, doc := range []string{
+		"---\ntitle: x\n",        // not closed
+		"\n---\ntitle: x\n---\n", // not on the first line
+		"---\n---\n",             // no keys
+		"---\njust text\n---\n",  // no keys
+		"+++\ntitle = 1\n---\n",  // the wrong fence
+		"----\ntitle: x\n----\n", // not a fence
+	} {
+		for _, b := range Parse(strings.Split(doc, "\n")) {
+			if b.Kind == Table {
+				t.Errorf("%q: %#v", doc, b)
+			}
+		}
+	}
+}

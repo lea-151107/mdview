@@ -133,10 +133,14 @@ func (d *doc) col(off int) int {
 // fences and math are not returned.
 func Parse(lines []string) []Block {
 	d := &doc{lines: lines}
+	// The front matter is not Markdown: goldmark sees blank lines there.
+	fmEnd, fm, hasFM := frontMatter(lines)
 	var b bytes.Buffer
 	for i, l := range lines {
 		d.starts = append(d.starts, b.Len())
-		b.WriteString(l)
+		if i >= fmEnd {
+			b.WriteString(l)
+		}
 		if i < len(lines)-1 {
 			b.WriteByte('\n')
 		}
@@ -150,6 +154,9 @@ func Parse(lines []string) []Block {
 	marks, _ := pc.Get(quoteMarks).(map[*ast.Blockquote][]int)
 
 	var out []Block
+	if hasFM {
+		out = append(out, Block{Kind: Table, Start: 1, End: fmEnd, Table: fm})
+	}
 	ids := map[string]int{} // heading id -> how many headings have it
 	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {

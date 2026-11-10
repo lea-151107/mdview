@@ -1,3 +1,17 @@
+---
+title: mdview 総合テスト
+date: 2026-11-11
+tags:
+  - vim
+  - markdown
+author:
+  name: lea
+  url: https://github.com/lea-151107
+homepage: https://github.com/lea-151107/mdview
+summary: >
+  front matter はキーと値の表になります。
+  長い値はセルの中で折り返します。
+---
 # mdview 総合テスト
 
 Markdown の書式、mermaid、数式、画像をまとめて確認するためのファイルです。

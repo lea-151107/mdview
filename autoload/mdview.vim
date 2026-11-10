@@ -17,7 +17,7 @@
 " dpp.vim's "merged"), where bin/ and go/ are not.
 let s:root = fnamemodify(resolve(expand('<sfile>:p')), ':h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 8
+let s:script_version = 9
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -1488,6 +1488,8 @@ function! s:add_table(v, r, first_line, opts, ...) abort
   " a:2: the bars of the quote it is in (s:quote_prefix()).
   let [quote, qprops; _] = a:0 > 1 ? a:2 : ['', [], 0]
   let t = a:r.table
+  " (The front matter's table has no header: its rows are all alike.)
+  let header = !get(t, 'no_header', 0)
   let ch = s:table_chars()
   let ncols = max([len(t.align)] + map(copy(t.rows), 'len(v:val)'))
   let align = t.align + repeat([''], ncols - len(t.align))
@@ -1504,7 +1506,8 @@ function! s:add_table(v, r, first_line, opts, ...) abort
   let src_lines = t.lines
   let first = {}   " row index -> its first viewer line
   let first_vl = len(a:v.lines) + 1
-  call Border(Rule(ch.tl, ch.tm, ch.tr), src_lines[0])
+  " (The front matter's borders are its fences.)
+  call Border(Rule(ch.tl, ch.tm, ch.tr), header ? src_lines[0] : a:r.start)
   for i in range(len(cells))
     let wrapped = []
     for j in range(ncols)
@@ -1574,7 +1577,7 @@ function! s:add_table(v, r, first_line, opts, ...) abort
           endif
           let line .= c[0]
         endfor
-        if i == 0 && len(line) > cell_start
+        if header && i == 0 && len(line) > cell_start
           call add(props, [cell_start + 1, 'mdview_table_header', len(line) - cell_start])
         endif
         let line .= repeat(' ', max([0, pad - left])) . ' '
@@ -1591,19 +1594,23 @@ function! s:add_table(v, r, first_line, opts, ...) abort
         let a:v.sig[-1] .= "\x02" . join(keys, ',')
       endif
     endfor
-    if i == 0
+    if header && i == 0
       let first[-1] = len(a:v.lines) + 1   " the delimiter row
       call Border(Rule(ch.ml, ch.mm, ch.mr), a:r.start + 1)
     endif
   endfor
-  call Border(Rule(ch.bl, ch.bm, ch.br), src_lines[-1])
+  call Border(Rule(ch.bl, ch.bm, ch.br), header ? src_lines[-1] : a:r.end)
   call s:plain_region(a:v, first_vl, a:r.start)
 
-  " Each source line of the table maps to the row it belongs to.
-  let rows = [[src_lines[0], first[0]], [a:r.start + 1, first[-1]]]
+  " Each source line of the table maps to the row it belongs to; the front
+  " matter's fences, to its borders.
+  let rows = [[src_lines[0], first[0]]] + (header ? [[a:r.start + 1, first[-1]]] : [])
   for i in range(1, len(src_lines) - 1)
     call add(rows, [src_lines[i], first[i]])
   endfor
+  if !header
+    let rows = [[a:r.start, first_vl]] + rows + [[a:r.end, len(a:v.lines)]]
+  endif
   for l in range(a:r.start, a:r.end)
     let to = rows[0][1]
     for [sl, vl] in rows

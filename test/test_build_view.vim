@@ -159,6 +159,31 @@ function! Test_build_view_table_line_break_and_quote() abort
   call assert_equal([2, 3, 4], v.map)
 endfunction
 
+" The front matter's table: keys and values, without a header.
+function! Test_build_view_table_no_header() abort
+  let src = Src(['---', 'title: 設計メモ', 'tags:', '- vim', '- md', 'url: https://x.y', '---', 'text'])
+  let r = s:table(1, 7, ['', ''], [2, 3, 6], [
+        \ [[['title', 'b']], [['設計メモ', '']]],
+        \ [[['tags', 'b']], [['- vim', ''], ["\n", ''], ['- md', '']]],
+        \ [[['url', 'b']], [['https://x.y', 'link', 0, 'https://x.y']]]])
+  let r.table.no_header = 1
+  let v = S('build_view')(src, [r])
+  call assert_equal([
+        \ '┌───────┬─────────────┐',
+        \ '│ title │ 設計メモ    │',
+        \ '│ tags  │ - vim       │',
+        \ '│       │ - md        │',
+        \ '│ url   │ https://x.y │',
+        \ '└───────┴─────────────┘',
+        \ 'text'], v.lines)
+  " The fences map to the borders.
+  call assert_equal([1, 2, 3, 3, 3, 5, 6, 7], v.map)
+  call assert_equal([1, 2, 3, 3, 6, 7, 8], v.rmap)
+  call assert_equal([], filter(copy(v.props), {_, p -> p[1] ==# 'mdview_table_header'}))
+  call assert_equal(3, len(filter(copy(v.props), {_, p -> p[1] ==# 'mdview_bold'})))
+  call assert_equal({5: [[15, 26, 'https://x.y']]}, v.links)
+endfunction
+
 function! Test_build_view_table_image_below() abort
   " An image without a cell (not from the Go side today) goes below.
   let src = Src(['| ![a](a.png) |', '|---|', 'z'])

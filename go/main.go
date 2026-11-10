@@ -32,7 +32,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 8
+const scriptVersion = 9
 
 const blockTimeout = 15 * time.Second
 
@@ -164,6 +164,8 @@ type tableResult struct {
 	Align []string    `json:"align"`
 	Rows  [][][][]any `json:"rows"`
 	Lines []int       `json:"lines"`
+	// NoHeader: rows[0] is not a header (the front matter's table).
+	NoHeader bool `json:"no_header,omitempty"`
 }
 
 // tableOf converts a table, with its inline math as text when inlineMath.
@@ -182,7 +184,8 @@ func spanText(sp blocks.Span, inlineMath bool) string {
 }
 
 func tableOf(t *blocks.TableData, inlineMath bool) *tableResult {
-	out := &tableResult{Align: t.Align, Lines: t.Lines, Rows: make([][][][]any, len(t.Rows))}
+	out := &tableResult{Align: t.Align, Lines: t.Lines, NoHeader: t.NoHeader,
+		Rows: make([][][][]any, len(t.Rows))}
 	for i, row := range t.Rows {
 		out.Rows[i] = make([][][]any, len(row))
 		for j, cell := range row {

@@ -254,6 +254,7 @@ func TestContract(t *testing.T) {
 	png.Encode(png0, image.NewRGBA(image.Rect(0, 0, 16, 16)))
 	png0.Close()
 	lines := []string{
+		"---", "title: T", "---",
 		"# Title",
 		"```mermaid", "graph TD", "  A-->B", "```",
 		"text $x^2$ and ![a](a.png) here",
