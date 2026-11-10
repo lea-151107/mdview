@@ -30,9 +30,10 @@ function! Test_contract() abort
   " borders), the one in a quote.
   call assert_equal([[2, 3, 0], [5, 6, 0], [8, 9, 2], [13, 14, 2]],
         \ map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
-  " The syntax regions: the paragraphs (none), the code of the broken
-  " mermaid and of the go block.
-  call assert_equal([[4, 4, '-'], [16, 17, 'mermaid'], [21, 21, '-'], [23, 23, 'go'], [26, 26, '-']],
+  " The syntax regions: the paragraphs and tables (none; the first table
+  " joined with the paragraph above it across the image's blank lines), the
+  " code of the broken mermaid and of the go block.
+  call assert_equal([[4, 12, '-'], [16, 17, 'mermaid'], [21, 21, '-'], [23, 23, 'go'], [26, 30, '-']],
         \ map(copy(v.code), 'v:val[:2]'))
   " The links of a paragraph and of a table cell, where they are shown.
   call assert_equal({'26': [[5, 14, '#title'], [19, 30, 'https://x.y']], '28': [[5, 9, 'b.md']]}, v.links)

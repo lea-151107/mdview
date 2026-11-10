@@ -750,15 +750,20 @@ function! s:add_para(v, src_lines, r, cx) abort
     let vl = get(seen, l, vl)
     call add(a:v.map, vl)
   endfor
-  " No markdown syntax on the text (an unescaped *x* would be concealed as
-  " italic): a region of its own, joined with the previous paragraph's
-  " across blank lines.
+  call s:plain_region(a:v, first_vl, a:r.start)
+endfunction
+
+" No markdown syntax on the viewer lines from first to the last (text laid
+" out without Markdown marks, where an unescaped *x* or a lone _ would be
+" concealed as italic): a region of its own, joined with the previous one
+" across blank lines. start: the source line they are from.
+function! s:plain_region(v, first, start) abort
   let last = len(a:v.lines)
   if !empty(a:v.code) && a:v.code[-1][2] ==# '-'
-        \ && empty(filter(a:v.lines[a:v.code[-1][1] : first_vl - 2], '!empty(v:val)'))
+        \ && empty(filter(a:v.lines[a:v.code[-1][1] : a:first - 2], '!empty(v:val)'))
     let a:v.code[-1][1] = last
   else
-    call add(a:v.code, [first_vl, last, '-', a:r.start])
+    call add(a:v.code, [a:first, last, '-', a:start])
   endif
 endfunction
 
@@ -1023,8 +1028,26 @@ function! s:code_syntax_here(regions, reset) abort
     let groups[group] = 1
   endfor
   let b:mdview_code_groups = keys(groups)
+  call s:intraword_syntax()
   " The regions start at line numbers: find them from the top.
   syntax sync fromstart
+endfunction
+
+" Characters that are punctuation (or symbols) to CommonMark, besides
+" ASCII's [:punct:]: Latin-1's, general punctuation, CJK and full-width
+" punctuation.
+let s:unicode_punct = '\u00a1-\u00bf\u00d7\u00f7\u2010-\u2027\u2030-\u205e\u3000-\u303f'
+      \ . '\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65'
+
+" In the lines shown as their source (headings), a run of _ after a letter
+" does not start italic or bold, as in CommonMark: the markdown syntax only
+" takes ASCII's \w for a letter, and conceals the _ of 日本_語 (and makes the
+" rest italic). A match defined after it, which wins at the same column.
+function! s:intraword_syntax() abort
+  silent! syntax clear mdviewIntraword
+  execute 'syntax match mdviewIntraword /[^[:space:][:punct:]' . s:unicode_punct
+        \ . ']\@4<=_\+/ transparent contains=NONE'
+  silent! syntax cluster markdownInline add=mdviewIntraword
 endfunction
 
 " Load the syntax name into the cluster @mdviewLang_{name}, once per buffer.
@@ -1296,6 +1319,7 @@ function! s:add_table(v, r, first_line, opts, ...) abort
         \ + [[len(prefix) + 1, 'mdview_table', len(line)], [len(prefix) + 1, 'mdview_table_border', len(line)]])}
   let src_lines = t.lines
   let first = {}   " row index -> its first viewer line
+  let first_vl = len(a:v.lines) + 1
   call Border(Rule(ch.tl, ch.tm, ch.tr), src_lines[0])
   for i in range(len(cells))
     let wrapped = []
@@ -1389,6 +1413,7 @@ function! s:add_table(v, r, first_line, opts, ...) abort
     endif
   endfor
   call Border(Rule(ch.bl, ch.bm, ch.br), src_lines[-1])
+  call s:plain_region(a:v, first_vl, a:r.start)
 
   " Each source line of the table maps to the row it belongs to.
   let rows = [[src_lines[0], first[0]], [a:r.start + 1, first[-1]]]
@@ -1591,7 +1616,7 @@ function! s:draw(src, state) abort
     call prop_add(a.last, 1, #{bufnr: viewer, type: 'mdview_anchor_end', id: a.id, length: 0})
   endfor
   let a:state.anchors = kept_before + added + kept_after
-  if get(a:state, 'code', []) != v.code
+  if !has_key(a:state, 'code') || a:state.code != v.code
     call s:code_syntax(viewer, v.code)
   endif
   let a:state.code = v.code
