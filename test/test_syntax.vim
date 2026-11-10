@@ -48,3 +48,48 @@ function! Test_table_without_markdown_syntax() abort
   " syntax, as a paragraph's.
   call assert_equal([[1, len(v.lines), '-', 1]], v.code)
 endfunction
+
+" The colors of code in a hidden buffer: byte ranges of the line with its
+" tabs expanded, and their highlight groups.
+function! Test_code_colors() abort
+  syntax on
+  try
+    let colors = S('code_colors')('vim', ["\tlet x = 1 \" note", 'echo "s"'], 8)
+    call assert_equal(2, len(colors))
+    " let (after the tab, 8 spaces) and the comment to the end.
+    call assert_equal([8, 11, 'Statement'], colors[0][0])
+    call assert_equal('Comment', colors[0][-1][2])
+    call assert_equal(len(repeat(' ', 8) . 'let x = 1 " note'), colors[0][-1][1])
+    call assert_equal('Constant', colors[1][-1][2])
+    " The same again: from the cache.
+    call assert_true(colors is S('code_colors')('vim', ["\tlet x = 1 \" note", 'echo "s"'], 8))
+  finally
+    syntax off
+  endtry
+  " Without syntax: none.
+  call assert_equal([], S('code_colors')('vim', ['let y = 2'], 8))
+endfunction
+
+" A block with a line wider than the frame: colored by properties from the
+" lines as a whole (the wrapped part of a comment too), not by its syntax;
+" one without, by its syntax.
+function! Test_build_view_code_colored() abort
+  syntax on
+  try
+    let src = Src(['```vim', 'let x = 1 " a long comment here', 'let y = 2', '```',
+          \ '```vim', 'let z = 3', '```'])
+    let r1 = #{kind: 'code', start: 1, end: 4, lang: 'vim', cols: [0, 0, 0, 0], closed: 1}
+    let r2 = #{kind: 'code', start: 5, end: 7, lang: 'vim', cols: [0, 0, 0], closed: 1}
+    let v = S('build_view')(src, [r1, r2], #{cellw: 8, cols: 20})
+  finally
+    syntax off
+  endtry
+  call assert_equal(['let x = 1 " a lo', 'ng comment here', 'let y = 2'], v.lines[1 : 3])
+  call assert_equal([[2, 4, '-'], [7, 7, 'vim']], map(copy(v.code), 'v:val[: 2]'))
+  let Types = {l -> uniq(sort(map(filter(copy(v.props), {_, p -> p[0] == l && p[1] =~# '^mdview_color_'}), 'v:val[1]')))}
+  call assert_equal(['mdview_color_Comment'], Types(3))
+  call assert_equal([[3, 'mdview_color_Comment', len('ng comment here'), 1]],
+        \ filter(copy(v.props), {_, p -> p[0] == 3 && p[1] =~# '^mdview_color_'}))
+  call assert_true(index(Types(4), 'mdview_color_Statement') >= 0)
+  call assert_equal([], Types(7))
+endfunction

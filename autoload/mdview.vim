@@ -624,7 +624,7 @@ function! s:build_view(src, results, ...) abort
   " 1-based, end excluded).
   let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: [], code: [], links: {}}
   let cx = #{headings: headings, inline: inline, quotes: quotes, codes: codes, rules: rules,
-        \ paras: paras,
+        \ paras: paras, code_blocks: {},
         \ cols: opts.cols, ts: getbufvar(a:src, '&tabstop', 8)}
   let i = 1
   for g in groups
@@ -966,9 +966,7 @@ function! s:code_line(v, src_lines, l, cx) abort
     return 1
   endif
   " The other lines go on at the column of the opening fence.
-  let [pre, props, _] = s:quote_prefix(src, marks, 1)
-  let pre .= repeat(' ', max([0, s:display_indent(a:src_lines[r.start - 1], r.cols[0])
-        \ - strdisplaywidth(pre)]))
+  let [pre, props] = s:code_prefix(r, a:src_lines, a:l, a:cx)
   if get(r, 'closed', 0) && a:l == r.end
     let t = pre . ch.bl
     let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t) - 1])) . ch.br
@@ -990,22 +988,179 @@ function! s:code_line(v, src_lines, l, cx) abort
   " The right bar at the window's right edge (under the top's corner), after
   " the code: a line longer than the frame is wrapped in it, the lines after
   " the first marked (ch.wrap).
-  let avail = max([1, a:cx.cols - strdisplaywidth(pre) - 4])
+  let avail = s:code_avail(pre, a:cx)
   let ww = strdisplaywidth(ch.wrap)
   let pieces = s:split_width(s:expand_tabs(strpart(src, col), a:cx.ts), avail, max([1, avail - ww]))
+  " A block with wrapped lines has the colors of its language as properties
+  " (s:code_block()), not its syntax: that would take the wrapped parts for
+  " lines of their own.
+  let block = s:code_block(r, a:src_lines, a:cx)
+  let runs = get(block.colors, a:l, [])
+  let off = 0
   for i in range(len(pieces))
     let w = strdisplaywidth(pieces[i]) + (i > 0 ? ww : 0)
     let right = [0, 'mdview_code_border', repeat(' ', max([0, avail - w]) + 1) . ch.v]
+    let hl = []
+    for [a, b, group] in runs
+      let [a, b] = [max([a, off]), min([b, off + len(pieces[i])])]
+      if a < b
+        call add(hl, [a - off + 1, s:color_type(group), b - a])
+      endif
+    endfor
     call s:add_line(a:v, pieces[i], a:l,
-          \ vt + [[1, 'mdview_code_border', bar . (i > 0 ? ch.wrap : '')], right])
+          \ vt + [[1, 'mdview_code_border', bar . (i > 0 ? ch.wrap : '')]] + hl + [right])
+    let off += len(pieces[i])
     let lnum = len(a:v.lines)
     if !empty(a:v.code) && a:v.code[-1][3] == r.start && a:v.code[-1][1] == lnum - 1
       let a:v.code[-1][1] = lnum
     else
-      call add(a:v.code, [lnum, lnum, s:code_syntax_name(lang), r.start])
+      call add(a:v.code, [lnum, lnum, block.syntax, r.start])
     endif
   endfor
   return 1
+endfunction
+
+" The prefix of line l of code block r before its bar: the quote's bars and
+" the spaces up to the column of the opening fence. [text, props of the
+" bars].
+function! s:code_prefix(r, src_lines, l, cx) abort
+  let [pre, props, _] = s:quote_prefix(a:src_lines[a:l - 1], get(a:cx.quotes, a:l, []), 1)
+  let pre .= repeat(' ', max([0, s:display_indent(a:src_lines[a:r.start - 1], a:r.cols[0])
+        \ - strdisplaywidth(pre)]))
+  return [pre, props]
+endfunction
+
+" The width for the code after prefix pre: the window's less the bars ("│ "
+" and " │").
+function! s:code_avail(pre, cx) abort
+  return max([1, a:cx.cols - strdisplaywidth(a:pre) - 4])
+endfunction
+
+" How the code of block r is colored, once per block of a view (in
+" cx.code_blocks): {syntax, colors}. A block without lines wider than the
+" frame has the syntax of its language (syntax: its name, or '' for none);
+" one with such lines, its colors from s:code_colors() (colors: source line
+" -> [[start, end, group]], syntax: '-' for none), when there are.
+function! s:code_block(r, src_lines, cx) abort
+  if has_key(a:cx.code_blocks, a:r.start)
+    return a:cx.code_blocks[a:r.start]
+  endif
+  let name = s:code_syntax_name(get(a:r, 'lang', ''))
+  let block = #{syntax: name, colors: {}}
+  let a:cx.code_blocks[a:r.start] = block
+  if empty(name)
+    return block
+  endif
+  let last = get(a:r, 'closed', 0) ? a:r.end - 1 : a:r.end
+  let lines = []   " [source line, text]
+  let wraps = 0
+  for l in range(a:r.start + 1, last)
+    let col = get(a:r.cols, l - a:r.start, -1)
+    let text = col < 0 ? '' : strpart(a:src_lines[l - 1], col)
+    call add(lines, [l, text])
+    if col >= 0 && strdisplaywidth(s:expand_tabs(text, a:cx.ts))
+          \ > s:code_avail(s:code_prefix(a:r, a:src_lines, l, a:cx)[0], a:cx)
+      let wraps = 1
+    endif
+  endfor
+  if !wraps
+    return block
+  endif
+  let colors = s:code_colors(name, map(copy(lines), 'v:val[1]'), a:cx.ts)
+  if empty(colors)
+    return block
+  endif
+  for k in range(len(lines))
+    let block.colors[lines[k][0]] = colors[k]
+  endfor
+  let block.syntax = '-'
+  return block
+endfunction
+
+" The colors of code in the syntax name, lines texts (tabs not expanded):
+" for each line, [[start, end, group]] byte ranges of it with its tabs
+" expanded (tabstop ts), the highlight groups the syntax gives them. Found
+" in a hidden buffer, the lines as they are (a syntax may care for tabs);
+" [] when it cannot (no syntax, no popups).
+let s:code_colors_cache = {}
+
+function! s:code_colors(name, texts, ts) abort
+  let key = a:name . "\x01" . a:ts . "\x01" . join(a:texts, "\n")
+  if has_key(s:code_colors_cache, key)
+    return s:code_colors_cache[key]
+  endif
+  let win = s:color_win()
+  if win == 0
+    return []
+  endif
+  let buf = winbufnr(win)
+  silent call deletebufline(buf, 1, '$')
+  call setbufline(buf, 1, a:texts)
+  " (Loaded again after :syntax off and on, which clear it.)
+  if getbufvar(buf, '&syntax') !=# a:name || empty(getbufvar(buf, 'current_syntax', ''))
+    call win_execute(win, 'setlocal syntax= | setlocal syntax=' . a:name . ' | syntax sync fromstart')
+  endif
+  let out = []
+  for i in range(len(a:texts))
+    let text = a:texts[i]
+    call win_execute(win, printf('let s:color_ids = map(range(1, %d), {_, c -> synIDtrans(synID(%d, c, 1))})',
+          \ len(text), i + 1))
+    let runs = []
+    let pos = 0   " byte offset in text
+    let done = 0  " bytes of the text expanded so far
+    let w = 0     " its display width
+    for c in split(text, '\zs')
+      let id = get(s:color_ids, pos, 0)
+      if c ==# "\t"
+        let n = a:ts - w % a:ts
+        let [bytes, w] = [n, w + n]
+      else
+        let [bytes, w] = [len(c), w + strdisplaywidth(c)]
+      endif
+      let group = id ? synIDattr(id, 'name') : ''
+      if !empty(group)
+        if !empty(runs) && runs[-1][1] == done && runs[-1][2] ==# group
+          let runs[-1][1] += bytes
+        else
+          call add(runs, [done, done + bytes, group])
+        endif
+      endif
+      let done += bytes
+      let pos += len(c)
+    endfor
+    call add(out, runs)
+  endfor
+  if len(s:code_colors_cache) >= 100
+    let s:code_colors_cache = {}
+  endif
+  let s:code_colors_cache[key] = out
+  return out
+endfunction
+
+" The hidden popup s:code_colors() finds colors in (made once), or 0.
+function! s:color_win() abort
+  if !exists('g:syntax_on') || !has('popupwin')
+    return 0
+  endif
+  if get(s:, 'color_popup', 0) && !empty(popup_getpos(s:color_popup))
+    return s:color_popup
+  endif
+  let buf = bufadd('')
+  call bufload(buf)
+  for [k, v] in items(#{buftype: 'nofile', bufhidden: 'hide', swapfile: 0, buflisted: 0, undolevels: -1})
+    call setbufvar(buf, '&' . k, v)
+  endfor
+  let s:color_popup = popup_create(buf, #{hidden: 1})
+  return s:color_popup
+endfunction
+
+" The property type that colors code with highlight group (made once).
+function! s:color_type(group) abort
+  let name = 'mdview_color_' . a:group
+  if empty(prop_type_get(name))
+    call prop_type_add(name, #{highlight: a:group, combine: v:true, priority: 5})
+  endif
+  return name
 endfunction
 
 " text cut into pieces of display width first (the first) and rest (the
