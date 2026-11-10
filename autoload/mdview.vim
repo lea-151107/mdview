@@ -884,9 +884,9 @@ endfunction
 
 function! s:code_chars() abort
   if &ambiwidth ==# 'double'
-    return #{tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|'}
+    return #{tl: '+', tr: '+', bl: '+', br: '+', h: '-', v: '|', wrap: '>'}
   endif
-  return #{tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│'}
+  return #{tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│', wrap: '↪'}
 endfunction
 
 " The Vim syntax for the language of a fence, or '' (none, or no syntax
@@ -959,8 +959,7 @@ function! s:code_line(v, src_lines, l, cx) abort
       call add(props, [len(t) + 2, 'mdview_code_lang', len(lang)])
       let t .= ' ' . lang . ' '
     endif
-    " (Closed by a corner at the window's right edge; the code's lines have
-    " no bar there, as they may be longer than the window.)
+    " (Closed by a corner at the window's right edge, above the code's bars.)
     let t .= repeat(ch.h, max([3, a:cx.cols - strdisplaywidth(t) - 1])) . ch.tr
     call add(props, [rule + 1, 'mdview_code_border', len(t) - rule])
     call s:add_line(a:v, t, a:l, props)
@@ -987,15 +986,45 @@ function! s:code_line(v, src_lines, l, cx) abort
     call add(vt, [1, type, strpart(pre, pos, c - 1 + n - pos)])
     let pos = c - 1 + n
   endfor
-  call add(vt, [1, 'mdview_code_border', strpart(pre, pos) . ch.v . ' '])
-  call s:add_line(a:v, s:expand_tabs(strpart(src, col), a:cx.ts), a:l, vt)
-  let lnum = len(a:v.lines)
-  if !empty(a:v.code) && a:v.code[-1][3] == r.start && a:v.code[-1][1] == lnum - 1
-    let a:v.code[-1][1] = lnum
-  else
-    call add(a:v.code, [lnum, lnum, s:code_syntax_name(lang), r.start])
-  endif
+  let bar = strpart(pre, pos) . ch.v . ' '
+  " The right bar at the window's right edge (under the top's corner), after
+  " the code: a line longer than the frame is wrapped in it, the lines after
+  " the first marked (ch.wrap).
+  let avail = max([1, a:cx.cols - strdisplaywidth(pre) - 4])
+  let ww = strdisplaywidth(ch.wrap)
+  let pieces = s:split_width(s:expand_tabs(strpart(src, col), a:cx.ts), avail, max([1, avail - ww]))
+  for i in range(len(pieces))
+    let w = strdisplaywidth(pieces[i]) + (i > 0 ? ww : 0)
+    let right = [0, 'mdview_code_border', repeat(' ', max([0, avail - w]) + 1) . ch.v]
+    call s:add_line(a:v, pieces[i], a:l,
+          \ vt + [[1, 'mdview_code_border', bar . (i > 0 ? ch.wrap : '')], right])
+    let lnum = len(a:v.lines)
+    if !empty(a:v.code) && a:v.code[-1][3] == r.start && a:v.code[-1][1] == lnum - 1
+      let a:v.code[-1][1] = lnum
+    else
+      call add(a:v.code, [lnum, lnum, s:code_syntax_name(lang), r.start])
+    endif
+  endfor
   return 1
+endfunction
+
+" text cut into pieces of display width first (the first) and rest (the
+" others) at most, between characters (a character wider than that is a
+" piece of its own).
+function! s:split_width(text, first, rest) abort
+  let out = []
+  let cur = ''
+  let w = 0
+  for c in split(a:text, '\zs')
+    let cw = strdisplaywidth(c)
+    if !empty(cur) && w + cw > (empty(out) ? a:first : a:rest)
+      call add(out, cur)
+      let [cur, w] = ['', 0]
+    endif
+    let cur .= c
+    let w += cw
+  endfor
+  return add(out, cur)
 endfunction
 
 " Give the code of the viewer the syntax of its language: a region on the
@@ -1475,7 +1504,8 @@ function! s:add_images(v, images, src_line, quote, opts, first_line) abort
 endfunction
 
 " Add a line with properties [[col, type, length]] (col 1-based). A length
-" that is a string is the text of a virtual text property.
+" that is a string is the text of a virtual text property; at col 0, one
+" after the line (its leading spaces the padding before it).
 function! s:add_line(v, line, src_line, props) abort
   call add(a:v.lines, a:line)
   call add(a:v.rmap, a:src_line)
@@ -1592,9 +1622,17 @@ function! s:draw(src, state) abort
     endif
     for [lnum, type, len, col] in v.props
       if lnum > p && lnum <= newn - q
-        call prop_add(lnum, col, type(len) == v:t_string
-              \ ? #{bufnr: viewer, type: type, text: len}
-              \ : #{bufnr: viewer, type: type, length: len})
+        if col == 0
+          " A virtual text after the line, its leading spaces as padding (not
+          " highlighted).
+          let pad = len(matchstr(len, '^ *'))
+          call prop_add(lnum, 0, #{bufnr: viewer, type: type, text: len[pad :],
+                \ text_align: 'after', text_padding_left: pad})
+        else
+          call prop_add(lnum, col, type(len) == v:t_string
+                \ ? #{bufnr: viewer, type: type, text: len}
+                \ : #{bufnr: viewer, type: type, length: len})
+        endif
       endif
     endfor
     call setbufvar(viewer, '&modifiable', 0)

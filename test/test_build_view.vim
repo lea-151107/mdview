@@ -290,10 +290,17 @@ function! Test_build_view_code() abort
   call assert_equal(['╭─ go ' . repeat('─', 13) . '╮', 'func f() {', '        x := 1', '', '}',
         \ '╰' . repeat('─', 18) . '╯', 'after'], v.lines)
   call assert_equal(range(1, 7), v.map)
+  " The code's bars: before it, and after it at the right edge (column 20,
+  " under the top's corner), the spaces before it its padding.
   call assert_equal([[1, 'mdview_code_lang', 2, 8], [1, 'mdview_code_border', len(v.lines[0]), 1],
-        \ [2, 'mdview_code_border', '│ ', 1], [3, 'mdview_code_border', '│ ', 1],
-        \ [4, 'mdview_code_border', '│ ', 1], [5, 'mdview_code_border', '│ ', 1],
+        \ [2, 'mdview_code_border', '│ ', 1], [2, 'mdview_code_border', repeat(' ', 7) . '│', 0],
+        \ [3, 'mdview_code_border', '│ ', 1], [3, 'mdview_code_border', repeat(' ', 3) . '│', 0],
+        \ [4, 'mdview_code_border', '│ ', 1], [4, 'mdview_code_border', repeat(' ', 17) . '│', 0],
+        \ [5, 'mdview_code_border', '│ ', 1], [5, 'mdview_code_border', repeat(' ', 16) . '│', 0],
         \ [6, 'mdview_code_border', len(v.lines[5]), 1]], v.props)
+  for l in range(2, 5)
+    call assert_equal(20, s:shown_width(v, l), 'line ' . l)
+  endfor
   call assert_equal([[2, 5, 'go', 1]], v.code)
 endfunction
 
@@ -304,8 +311,10 @@ function! Test_build_view_code_in_quote_and_list() abort
   let v = S('build_view')(src, [#{kind: 'quote', start: 1, end: 3, marks: [0, 0, 0]},
         \ #{kind: 'code', start: 1, end: 3, cols: [4, 4, 3]}], #{cellw: 8, cols: 20})
   call assert_equal(['│ - ╭' . repeat('─', 14) . '╮', 'x', 'y'], v.lines)
-  call assert_equal([[2, 'mdview_quote_bar', '│', 1], [2, 'mdview_code_border', '   │ ', 1]],
+  call assert_equal([[2, 'mdview_quote_bar', '│', 1], [2, 'mdview_code_border', '   │ ', 1],
+        \ [2, 'mdview_code_border', repeat(' ', 12) . '│', 0]],
         \ filter(copy(v.props), 'v:val[0] == 2'))
+  call assert_equal(20, s:shown_width(v, 2))
   call assert_equal([[2, 3, '', 1]], v.code)
   " Vim shows the virtual texts of a column by priority: the quotes' bars
   " must come before the frame's.
@@ -338,6 +347,46 @@ function! Test_build_view_code_ambiwidth_double() abort
   endtry
   call assert_equal(['+----+', 'x', '+----+'], v.lines)
   call assert_equal('| ', v.props[1][2])
+  call assert_equal('  |', v.props[2][2])
+  " A long line is wrapped in the frame, marked with >.
+  set ambiwidth=double
+  try
+    let v = S('build_view')(Src(['```', 'abcd', '```']), [#{kind: 'code', start: 1, end: 3,
+          \ cols: [0, 0, 0], closed: 1}], #{cellw: 8, cols: 7})
+  finally
+    set ambiwidth=single
+  endtry
+  call assert_equal(['+-----+', 'abc', 'd', '+-----+'], v.lines)
+  call assert_equal('| >', v.props[3][2])
+endfunction
+
+" The display width of viewer line l with its virtual texts.
+function! s:shown_width(v, l) abort
+  let w = strdisplaywidth(a:v.lines[a:l - 1])
+  for [lnum, _, text, _] in filter(copy(a:v.props), {_, p -> p[0] == a:l && type(p[2]) == v:t_string})
+    let w += strdisplaywidth(text)
+  endfor
+  return w
+endfunction
+
+" A line longer than the frame: wrapped in it, between characters (a wide
+" one not cut), the lines after the first marked; each with the right bar
+" at the right edge.
+function! Test_build_view_code_wrapped() abort
+  let src = Src(['```go', 'abcdefghijklmnopqrstu', 'あいうえおかきくけ', 'x', '```'])
+  let v = S('build_view')(src, [#{kind: 'code', start: 1, end: 5, lang: 'go',
+        \ cols: [0, 0, 0, 0, 0], closed: 1}], #{cellw: 8, cols: 12})
+  " 12 columns: 8 for the code ("│ " and " │"), 7 after the mark.
+  call assert_equal(['abcdefgh', 'ijklmno', 'pqrstu', 'あいうえ', 'おかき', 'くけ', 'x'], v.lines[1 : 7])
+  call assert_equal(['│ ', '│ ↪', '│ ↪', '│ ', '│ ↪', '│ ↪', '│ '],
+        \ map(range(2, 8), {_, l -> filter(copy(v.props), {_, p -> p[0] == l && p[3] == 1})[0][2]}))
+  for l in range(2, 8)
+    call assert_equal(12, s:shown_width(v, l), 'line ' . l)
+  endfor
+  " Each source line maps to its first viewer line; the wrapped lines to it.
+  call assert_equal([1, 2, 5, 8, 9], v.map)
+  call assert_equal([1, 2, 2, 2, 3, 3, 3, 4, 5], v.rmap)
+  call assert_equal([[2, 8, 'go', 1]], map(copy(v.code), 'v:val[: 2] + [v:val[3]]'))
 endfunction
 
 function! Test_code_syntax_name() abort
