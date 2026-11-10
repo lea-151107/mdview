@@ -14,11 +14,13 @@ import (
 // (underline), "link", "image" (an image's alt text) and "math" (Text is
 // the formula's source); "" is plain. A Span whose Text is "\n" is a line
 // break (<br>, or a hard line break in a paragraph). Line is the source
-// line (1-based) the span starts on.
+// line (1-based) the span starts on. URL is the destination of the link the
+// span is in (as written, or an autolink's URL), or "".
 type Span struct {
 	Text  string
 	Style string
 	Line  int
+	URL   string
 }
 
 // TableData is a GFM table: its cells without Markdown marks, for Vim to
@@ -102,17 +104,22 @@ func (d *doc) spans(n ast.Node, para bool) []Span {
 	if n.Lines().Len() > 0 {
 		line = d.line(n.Lines().At(0).Start)
 	}
+	url := "" // the destination of the link being visited
 	add := func(text string, styles []string) {
 		if text == "" {
 			return
 		}
 		style := strings.Join(styles, ",")
+		u := url
+		if style == "" && (text == "\n" || text == softBreak) {
+			u = ""
+		}
 		if k := len(out) - 1; text != "\n" && k >= 0 && out[k].Style == style &&
-			out[k].Text != "\n" && out[k].Line == line {
+			out[k].Text != "\n" && out[k].Line == line && out[k].URL == u {
 			out[k].Text += text
 			return
 		}
-		out = append(out, Span{Text: text, Style: style, Line: line})
+		out = append(out, Span{Text: text, Style: style, Line: line, URL: u})
 	}
 	// Styles opened by HTML tags (<u>, <b>, …) until their closing tag.
 	html := map[string]int{}
@@ -174,9 +181,15 @@ func (d *doc) spans(n ast.Node, para bool) []Span {
 				}
 				add(b.String(), with(st, "code"))
 			case *ast.Link:
+				outer := url
+				url = string(c.Destination)
 				visit(c, with(styles, "link"))
+				url = outer
 			case *ast.AutoLink:
+				outer := url
+				url = autoLinkURL(c, d.src)
 				add(string(c.Label(d.src)), with(st, "link"))
+				url = outer
 			case *ast.Image:
 				add("["+string(altText(c, d.src))+"]", with(st, "image"))
 			case *MathInline:
@@ -240,6 +253,16 @@ func (d *doc) spans(n ast.Node, para bool) []Span {
 		return []Span{}
 	}
 	return res
+}
+
+// autoLinkURL returns the URL an autolink goes to: an e-mail address with
+// "mailto:" when it has no scheme.
+func autoLinkURL(n *ast.AutoLink, src []byte) string {
+	u := string(n.URL(src))
+	if n.AutoLinkType == ast.AutoLinkEmail && !strings.HasPrefix(strings.ToLower(u), "mailto:") {
+		u = "mailto:" + u
+	}
+	return u
 }
 
 // joinSoftBreaks turns the soft line breaks of spans into a space, or into

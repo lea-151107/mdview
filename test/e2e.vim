@@ -47,11 +47,48 @@ try
 
   let src = $MDVIEW_E2E_CACHE . '/t.md'
   call writefile(['# 見出し', '', '| a | b |', '|---|---|', '| 1 | 2 |', '',
-        \ '```go', 'func main() {}', '```'], src)
+        \ '```go', 'func main() {}', '```', '', '[二つ目へ](#二つ目) と [次へ](u.md#sec)', '',
+        \ '## 二つ目'], src)
   execute 'edit' fnameescape(src)
   Mdview
   call s:check(s:wait('s:drawn()'), 'not drawn: ' . string(s:viewer_lines())
         \ . ' ' . string(goda#log('mdview')))
+
+  " Links: to another document's heading (its viewer in place of this one),
+  " back, and to a heading of the document.
+  call writefile(['# U', '', 'text', '', '## Sec', '', '[戻る](t.md)'], $MDVIEW_E2E_CACHE . '/u.md')
+  let nwin = winnr('$')
+  let vwin = win_getid(winnr('l'))
+  call win_gotoid(vwin)
+  call search('次へ')
+  call mdview#jump()
+  call s:check(s:wait('join(s:viewer_lines()) =~# "戻る"'), 'no viewer of u.md: ' . string(s:viewer_lines()))
+  call s:check(bufname(winbufnr(vwin)) =~# 'u\.md$', 'the viewer of u.md elsewhere: ' . bufname(winbufnr(vwin)))
+  call s:check(winnr('$') == nwin && win_getid() == vwin, 'windows: ' . winnr('$') . ' ' . win_getid())
+  " (Once drawn: the heading is known from the results.)
+  let uwin = get(win_findbuf(bufnr('u.md')), 0, 0)
+  call s:check(uwin > 0 && s:wait('getcurpos(' . uwin . ')[1] == 5'), 'not at ## Sec: ' . string(getcurpos(uwin)))
+  call search('戻る')
+  call mdview#jump()
+  call s:check(s:wait('s:drawn()'), 'not back: ' . string(s:viewer_lines()))
+  call search('二つ目へ')
+  call mdview#jump()
+  let twin = get(win_findbuf(bufnr('t.md')), 0, 0)
+  call s:check(twin > 0 && getcurpos(twin)[1] == 13, 'not at ## 二つ目: ' . string(getcurpos(twin)))
+  " <BS>: back to the link to ## 二つ目, then to u.md where 戻る was.
+  call s:check(maparg('<BS>', 'n') ==# '<Cmd>call mdview#back()<CR>', 'no <BS>: ' . maparg('<BS>', 'n'))
+  call mdview#back()
+  call s:check(getcurpos(twin)[1] == 11, 'not back at the link: ' . string(getcurpos(twin)))
+  call mdview#back()
+  let uwin = get(win_findbuf(bufnr('u.md')), 0, 0)
+  call s:check(uwin > 0 && s:wait('getcurpos(' . uwin . ')[1] == 7'), 'not back in u.md: ' . string(getcurpos(uwin)))
+  call s:check(bufname(winbufnr(vwin)) =~# 'u\.md$' && winnr('$') == nwin, 'the viewer of u.md: ' . bufname(winbufnr(vwin)))
+  " And back to t.md, at the link to u.md.
+  call mdview#back()
+  let twin = get(win_findbuf(bufnr('t.md')), 0, 0)
+  call s:check(twin > 0 && s:wait('getcurpos(' . twin . ')[1] == 11'), 'not back in t.md: ' . string(getcurpos(twin)))
+  call s:check(s:wait('s:drawn()'), 'not drawn back in t.md')
+  wincmd p
 
   " A binary of another version is refused, and goda.vim says to build it
   " again.

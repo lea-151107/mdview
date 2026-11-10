@@ -17,7 +17,7 @@
 " dpp.vim's "merged"), where bin/ and go/ are not.
 let s:root = fnamemodify(resolve(expand('<sfile>:p')), ':h:h')
 " Must equal scriptVersion in go/main.go.
-let s:script_version = 7
+let s:script_version = 8
 
 let s:images = {}     " cache key -> image id (image_add())
 let s:popups = {}     " winid -> {src, gen, items: [{pid, anchor, mode}]}
@@ -182,12 +182,21 @@ function! mdview#open(...) abort
     call mdview#close(src)
     return
   endif
+  call s:open(where)
+endfunction
+
+" Open the viewer of the current buffer (where: 'right' or 'here'). a:1: for
+" 'right', a window to show it in instead of a new one (the viewer of
+" another document, which goes away). Returns whether it opened.
+function! s:open(where, ...) abort
+  let where = a:where
+  let src = bufnr('%')
   if !empty(&l:buftype)
     call s:warn('not a file buffer')
-    return
+    return 0
   endif
   if !s:init()
-    return
+    return 0
   endif
 
   let name = 'mdview://' . (empty(bufname(src)) ? '[No Name ' . src . ']' : fnamemodify(bufname(src), ':p'))
@@ -200,6 +209,9 @@ function! mdview#open(...) abort
   if where ==# 'here'
     " The source stays loaded (with its changes) while the viewer is shown.
     call setbufvar(src, '&bufhidden', 'hide')
+    enew
+  elseif a:0 && win_gotoid(a:1)
+    " The viewer shown there is wiped (bufhidden=wipe) and detached.
     enew
   else
     vertical botright new
@@ -218,6 +230,8 @@ function! mdview#open(...) abort
   call cursor(lnum, 1)
   nnoremap <buffer><silent> q <Cmd>call mdview#close()<CR>
   nnoremap <buffer><silent> <CR> <Cmd>call mdview#jump()<CR>
+  nnoremap <buffer><silent> gx <Cmd>call mdview#open_link()<CR>
+  nnoremap <buffer><silent> <BS> <Cmd>call mdview#back()<CR>
   execute 'augroup mdview_view_' . viewer
     autocmd!
     execute 'autocmd BufWipeout <buffer=' . viewer . '> call s:detach(' . src . ')'
@@ -241,6 +255,7 @@ function! mdview#open(...) abort
     wincmd p
   endif
   call mdview#refresh(src)
+  return 1
 endfunction
 
 " Close the viewer of a source (default: the current buffer's).
@@ -332,7 +347,7 @@ function! mdview#refresh(...) abort
     let rows = min([rows, max_height])
   endif
   let [bg, fg] = s:colors()
-  let dir = empty(bufname(src)) ? getcwd() : fnamemodify(bufname(src), ':p:h')
+  let dir = s:source_dir(src)
   let s:req_id = get(s:, 'req_id', 0) + 1
   let state.req_id = s:req_id
   call timer_stop(get(state, 'timer', 0))
@@ -503,6 +518,8 @@ function! mdview#apply(src, tick, results, ...) abort
   let state.results = results
   let state.tick = a:tick
   call s:draw(a:src, state)
+  " A link (or <BS>) opened it: go to the heading, or the place, it said.
+  call s:goto_pending(a:src, state, meta.final)
   " This runs from the binary's channel "call", after which Vim does not
   " update the screen by itself: without this the new lines and images only
   " show up at the next key press.
@@ -603,7 +620,9 @@ function! s:build_view(src, results, ...) abort
 
   " code: the syntax regions of code blocks and paragraphs, [[first, last,
   " syntax, start]] ('-': none, for a paragraph).
-  let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: [], code: []}
+  " links: viewer line -> [[start, end, url]] of the links on it (columns
+  " 1-based, end excluded).
+  let v = #{lines: [], sig: [], map: [], rmap: [], anchors: [], props: [], code: [], links: {}}
   let cx = #{headings: headings, inline: inline, quotes: quotes, codes: codes, rules: rules,
         \ paras: paras,
         \ cols: opts.cols, ts: getbufvar(a:src, '&tabstop', 8)}
@@ -709,7 +728,7 @@ function! s:add_para(v, src_lines, r, cx) abort
   let srcl = start
   for k in range(len(rows))
     let [p, pp] = k == 0 ? [pre, pprops] : [cpre, cprops]
-    let [text, props] = s:styled_chars(rows[k], len(p))
+    let [text, props, links] = s:styled_chars(rows[k], len(p))
     if !empty(rows[k])
       let srcl = rows[k][0][3]
     endif
@@ -722,6 +741,9 @@ function! s:add_para(v, src_lines, r, cx) abort
       call add(props, [len(p) + 1, 'mdview_quote', len(text)])
     endif
     call s:add_line(a:v, p . text, srcl, pp + props)
+    if !empty(links)
+      let a:v.links[len(a:v.lines)] = links
+    endif
   endfor
   let vl = first_vl
   for l in range(start, a:r.end)
@@ -740,14 +762,25 @@ function! s:add_para(v, src_lines, r, cx) abort
   endif
 endfunction
 
-" The text of chars (from s:cell_lines()) and the properties of their
-" styles: [text, props], props at columns after offset bytes.
+" The text of chars (from s:cell_lines()), the properties of their styles
+" and their links: [text, props, links], props and links ([start, end, url],
+" end excluded) at columns after offset bytes.
 function! s:styled_chars(chars, offset) abort
   let text = ''
   let props = []
+  let links = []
   let run = ''
   let run_start = 0
+  let url = ''
+  let url_start = 0
   for c in a:chars + [['', "\x01", 0]]
+    if get(c, 4, '') !=# url
+      if !empty(url) && len(text) > url_start
+        call add(links, [a:offset + url_start + 1, a:offset + len(text) + 1, url])
+      endif
+      let url = get(c, 4, '')
+      let url_start = len(text)
+    endif
     if c[1] !=# run
       for st in split(run, ',')
         if has_key(s:table_styles, st) && len(text) > run_start
@@ -759,7 +792,7 @@ function! s:styled_chars(chars, offset) abort
     endif
     let text .= c[0]
   endfor
-  return [text, props]
+  return [text, props, links]
 endfunction
 
 " ---------------------------------------------------------------------------
@@ -1068,7 +1101,8 @@ function! s:table_chars() abort
 endfunction
 
 " A cell's runs [[text, style], ...] as lines of characters [[char, style,
-" width], ...], split at line breaks.
+" width, source line, link url], ...], split at line breaks. (A run of a
+" paragraph is [text, style, line] and one of a link has its url fourth.)
 function! s:cell_lines(runs, ...) abort
   " a:1: nth image of the cell -> its drawn image result; a:2: cell width.
   let images = a:0 ? a:1 : {}
@@ -1079,6 +1113,7 @@ function! s:cell_lines(runs, ...) abort
     " (A paragraph's runs have the source line too: chars get it.)
     let [text, style] = run[0 : 1]
     let line = get(run, 2, 0)
+    let url = get(run, 3, '')
     if text ==# "\n"
       call add(lines, [])
       continue
@@ -1094,7 +1129,7 @@ function! s:cell_lines(runs, ...) abort
       endif
     endif
     for c in split(substitute(text, '[\t\r\n]', ' ', 'g'), '\zs')
-      call add(lines[-1], [c, style, strdisplaywidth(c), line])
+      call add(lines[-1], [c, style, strdisplaywidth(c), line, url])
     endfor
   endfor
   if empty(images)
@@ -1282,6 +1317,7 @@ function! s:add_table(v, r, first_line, opts, ...) abort
     for k in range(max(map(copy(wrapped), 'len(v:val)')))
       let line = prefix
       let props = []
+      let links = []
       let keys = []
       for j in range(ncols)
         call add(props, [len(line) + 1, 'mdview_table_border', len(ch.v)])
@@ -1306,10 +1342,19 @@ function! s:add_table(v, r, first_line, opts, ...) abort
                   \ last: first_lnum + img.rows - 1, indent: strdisplaywidth(line)})
           endif
         endif
-        " Runs of one style, as properties.
+        " Runs of one style, as properties; runs of one link, as links.
         let run = ''
         let run_start = len(line)
+        let url = ''
+        let url_start = len(line)
         for c in chars + [['', "\x01", 0]]
+          if get(c, 4, '') !=# url
+            if !empty(url) && len(line) > url_start
+              call add(links, [url_start + 1, len(line) + 1, url])
+            endif
+            let url = get(c, 4, '')
+            let url_start = len(line)
+          endif
           if c[1] !=# run
             for s in split(run, ',')
               if has_key(s:table_styles, s) && len(line) > run_start
@@ -1330,6 +1375,9 @@ function! s:add_table(v, r, first_line, opts, ...) abort
       let line .= ch.v
       call insert(props, [len(prefix) + 1, 'mdview_table', len(line) - len(prefix)])
       call s:add_line(a:v, line, src_lines[i], qprops + props)
+      if !empty(links)
+        let a:v.links[len(a:v.lines)] = links
+      endif
       if !empty(keys)
         " The images on the line are part of it, for the diff in s:draw().
         let a:v.sig[-1] .= "\x02" . join(keys, ',')
@@ -1550,6 +1598,7 @@ function! s:draw(src, state) abort
   let a:state.sig = v.sig
   let a:state.map = v.map
   let a:state.rmap = v.rmap
+  let a:state.links = v.links
   if empty(get(a:state, 'gen', 0))
     let a:state.gen = 1
   endif
@@ -1707,11 +1756,17 @@ function! s:set_topline(top) abort
   call winrestview(view)
 endfunction
 
-" <CR> in the viewer: go to the source line of the cursor line.
+" <CR> in the viewer: open the link under the cursor, or go to the source
+" line of the cursor line.
 function! mdview#jump() abort
   let src = get(b:, 'mdview_source', 0)
   let state = s:state(src)
   if empty(state)
+    return
+  endif
+  let url = s:link_at(state, line('.'), col('.'))
+  if !empty(url)
+    call s:open_link(src, state, url)
     return
   endif
   let sl = get(state.rmap, line('.') - 1, 1)
@@ -1744,6 +1799,339 @@ endfunction
 " fenced code languages when the user has not set g:markdown_fenced_languages.
 function! s:set_markdown_filetype() abort
   setlocal filetype=markdown
+endfunction
+
+" ---------------------------------------------------------------------------
+" Links
+
+" The directory of a source: links and images are relative to it.
+function! s:source_dir(src) abort
+  return empty(bufname(a:src)) ? getcwd() : fnamemodify(bufname(a:src), ':p:h')
+endfunction
+
+" Links written in a line shown as its source (a heading, a paragraph kept
+" line by line): [pattern, what the url is] — the first group ('group'), the
+" match ('match'), or an e-mail address ('mail').
+let s:link_patterns = [
+      \ ['\[\%([^\]\\]\|\\.\)*\](\s*<\([^>]*\)>\%(\s\+\%("[^"]*"\|''[^'']*''\|([^)]*)\)\)\=\s*)', 'group'],
+      \ ['\[\%([^\]\\]\|\\.\)*\](\s*\([^ )]*\)\%(\s\+\%("[^"]*"\|''[^'']*''\)\)\=\s*)', 'group'],
+      \ ['<\(\a[[:alnum:]+.-]\+:[^ <>]\+\)>', 'group'],
+      \ ['<\([^ <>@]\+@[^ <>@]\+\)>', 'mail'],
+      \ ['\<\%(https\=\|ftp\)://[^ <>"''`]*[^ <>"''`.,;:!?)\]]', 'match'],
+      \ ]
+
+" The url of the link at byte column col (1-based) of a line of text, or ''.
+function! s:link_in_text(text, col) abort
+  for [pat, what] in s:link_patterns
+    let start = 0
+    while 1
+      let [m, s, e] = matchstrpos(a:text, pat, start)
+      if s < 0
+        break
+      endif
+      if a:col > s && a:col <= e
+        let g = matchlist(a:text, pat, s)[1]
+        return what ==# 'match' ? m : what ==# 'mail' ? 'mailto:' . g : g
+      endif
+      let start = e > s ? e : s + 1
+    endwhile
+  endfor
+  return ''
+endfunction
+
+" The url of the link at line lnum, byte column col of the viewer: one laid
+" out from the results (state.links), or one written in the line.
+function! s:link_at(state, lnum, col) abort
+  for [s, e, url] in get(get(a:state, 'links', {}), a:lnum, [])
+    if a:col >= s && a:col < e
+      return url
+    endif
+  endfor
+  return s:link_in_text(get(getbufline(a:state.viewer, a:lnum), 0, ''), a:col)
+endfunction
+
+" gx in the viewer: open the link under the cursor.
+function! mdview#open_link() abort
+  let src = get(b:, 'mdview_source', 0)
+  let state = s:state(src)
+  if empty(state)
+    return
+  endif
+  let url = s:link_at(state, line('.'), col('.'))
+  if empty(url)
+    call s:warn('no link under the cursor')
+    return
+  endif
+  call s:open_link(src, state, url)
+endfunction
+
+" %XX in a url as the bytes they stand for.
+function! s:url_decode(s) abort
+  return substitute(a:s, '%\(\x\x\)', '\=eval(''"\x'' . submatch(1) . ''"'')', 'g')
+endfunction
+
+" Files opened with the system's application, not in Vim.
+let s:external = '\c\.\%(png\|jpe\=g\|gif\|webp\|bmp\|svg\|ico\|tiff\=\|avif\|heic\|pdf\|'
+      \ . 'mp[34]\|m4a\|wav\|ogg\|flac\|mov\|mkv\|webm\|avi\|zip\|gz\|tgz\|xz\|7z\|'
+      \ . 'docx\=\|xlsx\=\|pptx\=\|odt\|ods\|odp\|epub\)$'
+
+" Where a link of the source src goes: #{kind, target, id}. kind:
+"   'anchor'   a heading (id) of this document
+"   'open'     a URL or a file (target) for the system's application
+"   'doc'      a Markdown file (target), at its heading id if any
+"   'edit'     another file (target), to edit in Vim
+"   'missing'  a file (target) that does not exist
+function! s:link_target(src, url) abort
+  let url = trim(a:url)
+  if url =~# '^#'
+    return #{kind: 'anchor', target: '', id: s:url_decode(url[1 :])}
+  endif
+  if url =~? '^file:'
+    let url = substitute(url, '\c^file:\%(//\%(localhost\)\=\)\=', '', '')
+  elseif url =~# '^\a[[:alnum:]+.-]\+:'
+    " (Two letters at least: C:\ is a path.)
+    return #{kind: 'open', target: url, id: ''}
+  endif
+  let id = s:url_decode(matchstr(url, '#\zs.*'))
+  let path = s:url_decode(matchstr(url, '^[^#?]*'))
+  if empty(path)
+    return #{kind: 'anchor', target: '', id: id}
+  endif
+  if path !~# '^[/\\]' && path !~# '^\a:[/\\]'
+    let path = s:source_dir(a:src) . '/' . path
+  endif
+  let path = simplify(fnamemodify(path, ':p'))
+  if isdirectory(path)
+    return #{kind: 'open', target: path, id: ''}
+  elseif !filereadable(path)
+    return #{kind: 'missing', target: path, id: ''}
+  elseif path =~? '\.\%(md\|markdown\|mkd\|mkdn\|mdown\)$'
+    return #{kind: 'doc', target: path, id: id}
+  elseif path =~# s:external
+    return #{kind: 'open', target: path, id: ''}
+  endif
+  return #{kind: 'edit', target: path, id: ''}
+endfunction
+
+" Open a link of the viewer of src (called in the viewer).
+function! s:open_link(src, state, url) abort
+  let t = s:link_target(a:src, a:url)
+  if t.kind ==# 'anchor'
+    let pos = s:place(a:src, a:state)
+    if s:goto_anchor(a:src, a:state, t.id)
+      call s:push_history(a:state, pos)
+    endif
+  elseif t.kind ==# 'open'
+    try
+      call dist#vim9#Open(t.target)
+    catch
+      call s:warn('cannot open ' . t.target . ': ' . v:exception)
+    endtry
+  elseif t.kind ==# 'missing'
+    call s:warn('not found: ' . t.target)
+  else
+    call s:open_file(a:src, a:state, t.target, t.kind ==# 'doc', #{id: t.id})
+  endif
+endfunction
+
+" The places <BS> in the viewer goes back to, at most this many.
+let s:history_max = 100
+
+" Where the viewer of src is (called in it), to come back to: {buf, path,
+" line, top}, the source lines of the cursor and of the window's top.
+function! s:place(src, state) abort
+  return #{buf: a:src, path: fnamemodify(bufname(a:src), ':p'),
+        \ line: get(a:state.rmap, line('.') - 1, 1), top: get(a:state.rmap, line('w0') - 1, 1)}
+endfunction
+
+function! s:push_history(state, pos) abort
+  let h = add(get(a:state, 'history', []), a:pos)
+  if len(h) > s:history_max
+    call remove(h, 0, len(h) - s:history_max - 1)
+  endif
+  let a:state.history = h
+endfunction
+
+" :edit a file (a path) or :buffer a buffer (a number) in the current
+" window; warns and returns 0 when it cannot (the buffer has changes and
+" 'hidden' is off).
+function! s:edit(target) abort
+  try
+    if type(a:target) == v:t_number
+      execute 'buffer' a:target
+    else
+      execute 'edit' fnameescape(a:target)
+    endif
+    return 1
+  catch
+    call s:warn(substitute(v:exception, '^Vim\%((\a\+)\)\=:', '', ''))
+    return 0
+  endtry
+endfunction
+
+" Open target (a path, or a buffer number) from the viewer of src: in the
+" source's window, and for a Markdown file (doc) with its viewer in place
+" of this one. Another file is edited in the source's window, which gets
+" the cursor. opts: {id}: go to that heading; {pos, history}: go back to
+" pos ({line, top} of s:place()), the viewer's history becoming history.
+" Otherwise where the viewer was is added to its history. Returns whether
+" it opened.
+function! s:open_file(src, state, target, doc, opts) abort
+  let vwin = win_getid()
+  let back = has_key(a:opts, 'pos')
+  let here = s:place(a:src, a:state)
+  let history = back ? a:opts.history : get(a:state, 'history', [])
+  if a:state.here
+    " The viewer's window shows the source again, then the file.
+    call mdview#close(a:src)
+    if !s:edit(a:target)
+      call s:open('here')
+      return 0
+    endif
+  else
+    let wins = win_findbuf(a:src)
+    if empty(wins)
+      execute 'leftabove vertical sbuffer' a:src
+    else
+      call win_gotoid(wins[0])
+    endif
+    if !s:edit(a:target)
+      call win_gotoid(vwin)
+      return 0
+    endif
+  endif
+  if !a:doc
+    return 1
+  endif
+  let src = bufnr('%')
+  if src == a:src
+    " A link to this document itself.
+    if a:state.here
+      call s:open('here')
+    else
+      call win_gotoid(vwin)
+    endif
+  else
+    " The file may have a viewer of its own already.
+    call mdview#close(src)
+    if a:state.here ? !s:open('here') : !s:open('right', vwin)
+      return 0
+    endif
+    if !a:state.here
+      " Stay in the viewer, as before the link was opened.
+      call win_gotoid(vwin)
+    endif
+  endif
+  let state = s:state(src)
+  if empty(state)
+    return 1
+  endif
+  let state.history = copy(history)
+  if !back
+    call s:push_history(state, here)
+  endif
+  " Where to go once drawn (mdview#apply()), or at once when it is.
+  if back
+    let state.goto_pos = a:opts.pos
+  elseif !empty(get(a:opts, 'id', ''))
+    let state.goto = a:opts.id
+  endif
+  if !empty(get(state, 'results', []))
+    call s:goto_pending(src, state, 1)
+  endif
+  return 1
+endfunction
+
+" Go where opening the viewer of src left to go (s:open_file()): a heading
+" once it is known (or when final), or a place.
+function! s:goto_pending(src, state, final) abort
+  if has_key(a:state, 'goto_pos')
+    call s:goto_pos(a:src, a:state, remove(a:state, 'goto_pos'))
+  elseif has_key(a:state, 'goto') && (a:final || s:find_heading(a:state, a:state.goto) > 0)
+    call s:goto_anchor(a:src, a:state, remove(a:state, 'goto'))
+  endif
+endfunction
+
+" <BS> in the viewer: go back to where the viewer was before the last link
+" it followed (another document, or a heading of this one).
+function! mdview#back() abort
+  let src = get(b:, 'mdview_source', 0)
+  let state = s:state(src)
+  if empty(state)
+    return
+  endif
+  let history = get(state, 'history', [])
+  if empty(history)
+    call s:warn('no place to go back to')
+    return
+  endif
+  let pos = history[-1]
+  if pos.buf == src
+    call remove(history, -1)
+    call s:goto_pos(src, state, pos)
+    return
+  endif
+  call s:open_file(src, state, bufexists(pos.buf) ? pos.buf : pos.path, 1,
+        \ #{pos: pos, history: history[: -2]})
+endfunction
+
+" Show the source lines pos.top (at the top) and pos.line (the cursor) of
+" src: in the source's window, which the viewer follows, or in the viewer.
+function! s:goto_pos(src, state, pos) abort
+  let n = len(a:state.map)
+  let [line, top] = [min([a:pos.line, n]), min([a:pos.top, n])]
+  let wins = a:state.here ? [] : win_findbuf(a:src)
+  if !empty(wins)
+    call win_execute(wins[0], printf('call winrestview(#{topline: %d, lnum: %d, col: 0})', top, line))
+    call win_execute(wins[0], 'call s:follow(' . a:src . ')')
+    return
+  endif
+  for win in win_findbuf(a:state.viewer)
+    call win_execute(win, printf('call winrestview(#{topline: %d, lnum: %d, col: 0})',
+          \ get(a:state.map, top - 1, 1), get(a:state.map, line - 1, 1)))
+  endfor
+endfunction
+
+" The first line of the heading of state's results whose id is id (or is
+" the same ignoring case), or 0.
+function! s:find_heading(state, id) abort
+  let hs = filter(copy(get(a:state, 'results', [])),
+        \ {_, r -> r.kind ==# 'heading' && !empty(get(r, 'id', ''))})
+  for r in hs
+    if r.id ==# a:id
+      return r.start
+    endif
+  endfor
+  for r in hs
+    if r.id ==? a:id
+      return r.start
+    endif
+  endfor
+  return 0
+endfunction
+
+" Go to the heading id of src ('' is the top) in its viewer, and in the
+" source's window (which the viewer follows), each at the top of its window.
+" Both remember where they were (m'), for <C-o>. Returns whether there is
+" that heading.
+function! s:goto_anchor(src, state, id) abort
+  let sl = empty(a:id) ? 1 : s:find_heading(a:state, a:id)
+  if sl == 0
+    call s:warn('no heading: #' . a:id)
+    return 0
+  endif
+  let vl = get(a:state.map, sl - 1, 1)
+  for win in win_findbuf(a:state.viewer)
+    call win_execute(win, "normal! m'")
+    call win_execute(win, 'call cursor(' . vl . ', 1) | normal! zt')
+  endfor
+  let wins = a:state.here ? [] : win_findbuf(a:src)
+  if !empty(wins)
+    call win_execute(wins[0], "normal! m'")
+    call win_execute(wins[0], 'call cursor(' . sl . ', 1) | normal! zt')
+    call win_execute(wins[0], 'call s:follow(' . a:src . ')')
+  endif
+  return 1
 endfunction
 
 " ---------------------------------------------------------------------------

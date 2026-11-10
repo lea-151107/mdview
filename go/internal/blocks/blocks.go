@@ -6,10 +6,12 @@ package blocks
 
 import (
 	"bytes"
+	"fmt"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -86,6 +88,7 @@ type Block struct {
 	Cols   []int      // Code: column of the text of each line, or -1
 	Closed bool       // Code: End is the closing fence
 	Spans  []Span     // Para: its text
+	ID     string     // Heading: the id a link "#id" goes to (see headingID)
 }
 
 // CellPos is where an image in a table is: the row (0 is the header) and
@@ -147,6 +150,7 @@ func Parse(lines []string) []Block {
 	marks, _ := pc.Get(quoteMarks).(map[*ast.Blockquote][]int)
 
 	var out []Block
+	ids := map[string]int{} // heading id -> how many headings have it
 	_ = ast.Walk(root, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -171,7 +175,7 @@ func Parse(lines []string) []Block {
 				first := n.Lines().At(0)
 				last := n.Lines().At(n.Lines().Len() - 1)
 				out = append(out, Block{Kind: Heading, Start: d.line(first.Start),
-					End: d.line(max(last.Start, last.Stop-1))})
+					End: d.line(max(last.Start, last.Stop-1)), ID: d.headingID(n, ids)})
 			}
 		case *ast.Image:
 			out = append(out, d.image(n))
@@ -536,4 +540,38 @@ func (d *doc) para(n ast.Node) (Block, bool) {
 	first, last := ls.At(0), ls.At(ls.Len()-1)
 	return Block{Kind: Para, Start: d.line(first.Start), End: d.line(max(last.Start, last.Stop-1)),
 		Col: d.col(first.Start), Spans: d.spans(n, true)}, true
+}
+
+// headingID returns the id of heading n: its {#id} attribute, or its text
+// made a slug as GitHub does (lower case, without punctuation, spaces as
+// "-"), with "-1", "-2", … after an id an earlier heading has. ids counts
+// the ids given so far.
+func (d *doc) headingID(n *ast.Heading, ids map[string]int) string {
+	if v, ok := n.AttributeString("id"); ok {
+		if b, ok := v.([]byte); ok && len(b) > 0 {
+			id := string(b)
+			ids[id]++
+			return id
+		}
+	}
+	var t strings.Builder
+	for _, sp := range d.spans(n, false) {
+		t.WriteString(sp.Text)
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(t.String()) {
+		switch {
+		case r == ' ':
+			b.WriteByte('-')
+		case r == '-' || r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r):
+			b.WriteRune(r)
+		}
+	}
+	base := b.String()
+	id := base
+	for k := 1; ids[id] > 0; k++ {
+		id = fmt.Sprintf("%s-%d", base, k)
+	}
+	ids[id]++
+	return id
 }

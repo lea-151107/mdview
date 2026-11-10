@@ -32,7 +32,7 @@ import (
 const renderVersion = "1"
 
 // scriptVersion must equal s:script_version in autoload/mdview.vim.
-const scriptVersion = 7
+const scriptVersion = 8
 
 const blockTimeout = 15 * time.Second
 
@@ -150,17 +150,20 @@ type result struct {
 	Lang   string `json:"lang,omitempty"`
 	Cols   []int  `json:"cols,omitempty"`
 	Closed bool   `json:"closed,omitempty"`
-	// Spans: a paragraph's text, [text, style, source line] each.
+	// Spans: a paragraph's text, [text, style, source line] each, and the
+	// link's destination after them in a link: [text, style, line, url].
 	Spans [][]any `json:"spans,omitempty"`
+	// ID: the id of a heading, that a link "#id" goes to.
+	ID string `json:"id,omitempty"`
 }
 
 // tableResult is a table for Vim: rows[row][column] is a list of
-// [text, style] runs (see blocks.Span); lines[row] is the source line of the
-// row.
+// [text, style] runs (see blocks.Span), [text, style, 0, url] in a link;
+// lines[row] is the source line of the row.
 type tableResult struct {
-	Align []string        `json:"align"`
-	Rows  [][][][2]string `json:"rows"`
-	Lines []int           `json:"lines"`
+	Align []string    `json:"align"`
+	Rows  [][][][]any `json:"rows"`
+	Lines []int       `json:"lines"`
 }
 
 // tableOf converts a table, with its inline math as text when inlineMath.
@@ -179,13 +182,17 @@ func spanText(sp blocks.Span, inlineMath bool) string {
 }
 
 func tableOf(t *blocks.TableData, inlineMath bool) *tableResult {
-	out := &tableResult{Align: t.Align, Lines: t.Lines, Rows: make([][][][2]string, len(t.Rows))}
+	out := &tableResult{Align: t.Align, Lines: t.Lines, Rows: make([][][][]any, len(t.Rows))}
 	for i, row := range t.Rows {
-		out.Rows[i] = make([][][2]string, len(row))
+		out.Rows[i] = make([][][]any, len(row))
 		for j, cell := range row {
-			out.Rows[i][j] = make([][2]string, 0, len(cell))
+			out.Rows[i][j] = make([][]any, 0, len(cell))
 			for _, sp := range cell {
-				out.Rows[i][j] = append(out.Rows[i][j], [2]string{spanText(sp, inlineMath), sp.Style})
+				run := []any{spanText(sp, inlineMath), sp.Style}
+				if sp.URL != "" {
+					run = append(run, 0, sp.URL)
+				}
+				out.Rows[i][j] = append(out.Rows[i][j], run)
 			}
 		}
 	}
@@ -339,11 +346,15 @@ func (p *plugin) run(ctx context.Context, req request, send func([]result, bool)
 	for i, b := range bs {
 		switch b.Kind {
 		case blocks.Heading:
-			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End}
+			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, ID: b.ID}
 		case blocks.Para:
 			spans := make([][]any, 0, len(b.Spans))
 			for _, sp := range b.Spans {
-				spans = append(spans, []any{spanText(sp, req.InlineMath != 0), sp.Style, sp.Line})
+				run := []any{spanText(sp, req.InlineMath != 0), sp.Style, sp.Line}
+				if sp.URL != "" {
+					run = append(run, sp.URL)
+				}
+				spans = append(spans, run)
 			}
 			results[i] = result{Kind: string(b.Kind), Start: b.Start, End: b.End, Col: b.Col, Spans: spans}
 		case blocks.Rule:

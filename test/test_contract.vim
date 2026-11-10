@@ -18,10 +18,12 @@ function! Test_contract() abort
         \ '│ 💡 Tip', '│ - │ t',
         \ '╭─ go ' . repeat('─', 73) . '╮', '        x := 1', '╰' . repeat('─', 78) . '╯',
         \ '│ ' . repeat('─', 78),
+        \ 'see the title and https://x.y',
+        \ '┌──────┐', '│ cell │', '├──────┤', '└──────┘',
         \ ], v.lines)
   call assert_equal(['mdview_alert_tip', 'mdview_bold', 'mdview_code_border',
         \ 'mdview_code_lang', 'mdview_error', 'mdview_heading', 'mdview_image',
-        \ 'mdview_math', 'mdview_quote', 'mdview_quote_bar', 'mdview_rule',
+        \ 'mdview_link', 'mdview_math', 'mdview_quote', 'mdview_quote_bar', 'mdview_rule',
         \ 'mdview_table', 'mdview_table_border', 'mdview_table_header'],
         \ uniq(sort(map(copy(v.props), 'v:val[1]'))))
   " mermaid, the image in text, the one in a table cell (inside its
@@ -30,5 +32,8 @@ function! Test_contract() abort
         \ map(copy(v.anchors), {_, a -> [a.first, a.last, a.indent]}))
   " The syntax regions: the paragraphs (none), the code of the broken
   " mermaid and of the go block.
-  call assert_equal([[4, 4, '-'], [16, 17, 'mermaid'], [21, 21, '-'], [23, 23, 'go']], map(copy(v.code), 'v:val[:2]'))
+  call assert_equal([[4, 4, '-'], [16, 17, 'mermaid'], [21, 21, '-'], [23, 23, 'go'], [26, 26, '-']],
+        \ map(copy(v.code), 'v:val[:2]'))
+  " The links of a paragraph and of a table cell, where they are shown.
+  call assert_equal({'26': [[5, 14, '#title'], [19, 30, 'https://x.y']], '28': [[5, 9, 'b.md']]}, v.links)
 endfunction

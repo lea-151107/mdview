@@ -17,7 +17,8 @@ Markdown の書式、mermaid、数式、画像をまとめて確認するため�
 - インラインコード: `let x = 1` と `**not bold**`
 - エスケープ: \*not italic\* と \_not italic\_
 - 単語の中の下線: snake_case_name は斜体にならない
-- リンク: [mdview のヘルプ](doc/mdview.txt) と <https://example.com>
+- リンク（`<CR>` か `gx` で開く）: [mdview のヘルプ](../doc/mdview.txt) と <https://example.com>
+- 見出しへのリンク: [4. mermaid へ](#4-mermaid) と [別の文書の見出し](nested.md#画像)、画像のファイル: [gradient.png](gradient.png)
 - インライン数式（1 行のテキストにする）: $E = mc^2$ と $\alpha + \beta$ と $\frac{a+b}{c}$
 
 段落の中の改行は

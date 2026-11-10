@@ -290,14 +290,14 @@ func TestTable(t *testing.T) {
 		Align: []string{"l", "c", "r"},
 		Lines: []int{3, 5, 6, 7},
 		Rows: [][][]Span{
-			{{{"左", "", 0}}, {{"中", "", 0}}, {{"右", "", 0}}},
-			{{{"b", "b", 0}, {" ", "", 0}, {"i", "i", 0}, {" ", "", 0}, {"bi", "b,i", 0}},
-				{{"c", "code", 0}, {" ", "", 0}, {"s", "strike", 0}, {" ", "", 0}, {"u", "u", 0}},
-				{{"a|b & *", "", 0}}},
-			{{{"x", "", 0}, {"\n", "", 0}, {"y", "", 0}},
-				{{"l", "link", 0}, {" ", "", 0}, {"https://x.y", "link", 0}},
-				{{"[alt]", "image", 0}, {" ", "", 0}, {"x^2", "math", 0}}},
-			{{{"only", "", 0}}, {}, {}},
+			{{{"左", "", 0, ""}}, {{"中", "", 0, ""}}, {{"右", "", 0, ""}}},
+			{{{"b", "b", 0, ""}, {" ", "", 0, ""}, {"i", "i", 0, ""}, {" ", "", 0, ""}, {"bi", "b,i", 0, ""}},
+				{{"c", "code", 0, ""}, {" ", "", 0, ""}, {"s", "strike", 0, ""}, {" ", "", 0, ""}, {"u", "u", 0, ""}},
+				{{"a|b & *", "", 0, ""}}},
+			{{{"x", "", 0, ""}, {"\n", "", 0, ""}, {"y", "", 0, ""}},
+				{{"l", "link", 0, "u"}, {" ", "", 0, ""}, {"https://x.y", "link", 0, "https://x.y"}},
+				{{"[alt]", "image", 0, ""}, {" ", "", 0, ""}, {"x^2", "math", 0, ""}}},
+			{{{"only", "", 0, ""}}, {}, {}},
 		},
 	}
 	// (The spans' lines are checked in TestPara.)
@@ -488,17 +488,17 @@ func TestPara(t *testing.T) {
 		want []p
 	}{
 		{"marks", "これは **太字** と <u>下線</u> と [リンク](http://x) `c` \\*x\\*",
-			[]p{{1, 1, 0, []Span{{"これは ", "", 1}, {"太字", "b", 1}, {" と ", "", 1}, {"下線", "u", 1},
-				{" と ", "", 1}, {"リンク", "link", 1}, {" ", "", 1}, {"c", "code", 1}, {" *x*", "", 1}}}}},
+			[]p{{1, 1, 0, []Span{{"これは ", "", 1, ""}, {"太字", "b", 1, ""}, {" と ", "", 1, ""}, {"下線", "u", 1, ""},
+				{" と ", "", 1, ""}, {"リンク", "link", 1, "http://x"}, {" ", "", 1, ""}, {"c", "code", 1, ""}, {" *x*", "", 1, ""}}}}},
 		{"soft breaks", "日本語の\n続きと\nEnglish\nwords",
-			[]p{{1, 4, 0, []Span{{"日本語の", "", 1}, {"続きと ", "", 2}, {"English ", "", 3}, {"words", "", 4}}}}},
+			[]p{{1, 4, 0, []Span{{"日本語の", "", 1, ""}, {"続きと ", "", 2, ""}, {"English ", "", 3, ""}, {"words", "", 4, ""}}}}},
 		{"hard breaks", "a  \nb\\\nc<br>d",
-			[]p{{1, 3, 0, []Span{{"a", "", 1}, {"\n", "", 1}, {"b", "", 2}, {"\n", "", 2}, {"c", "", 3},
-				{"\n", "", 3}, {"d", "", 3}}}}},
-		{"in a quote", "> a\n> b", []p{{1, 2, 2, []Span{{"a ", "", 1}, {"b", "", 2}}}}},
-		{"tight list", "- x\n- [ ] y\n- [x] z", []p{{1, 1, 2, []Span{{"x", "", 1}}},
-			{2, 2, 2, []Span{{"[ ] y", "", 2}}}, {3, 3, 2, []Span{{"[x] z", "", 3}}}}},
-		{"two paragraphs", "a\n\nb", []p{{1, 1, 0, []Span{{"a", "", 1}}}, {3, 3, 0, []Span{{"b", "", 3}}}}},
+			[]p{{1, 3, 0, []Span{{"a", "", 1, ""}, {"\n", "", 1, ""}, {"b", "", 2, ""}, {"\n", "", 2, ""}, {"c", "", 3, ""},
+				{"\n", "", 3, ""}, {"d", "", 3, ""}}}}},
+		{"in a quote", "> a\n> b", []p{{1, 2, 2, []Span{{"a ", "", 1, ""}, {"b", "", 2, ""}}}}},
+		{"tight list", "- x\n- [ ] y\n- [x] z", []p{{1, 1, 2, []Span{{"x", "", 1, ""}}},
+			{2, 2, 2, []Span{{"[ ] y", "", 2, ""}}}, {3, 3, 2, []Span{{"[x] z", "", 3, ""}}}}},
+		{"two paragraphs", "a\n\nb", []p{{1, 1, 0, []Span{{"a", "", 1, ""}}}, {3, 3, 0, []Span{{"b", "", 3, ""}}}}},
 		{"not a heading or code", "# h\n\n```\nx\n```", nil},
 	}
 	for _, c := range cases {
@@ -506,6 +506,57 @@ func TestPara(t *testing.T) {
 			var got []p
 			for _, b := range ofKind(Parse(strings.Split(c.doc, "\n")), Para) {
 				got = append(got, p{b.Start, b.End, b.Col, b.Spans})
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Fatalf("got\n%#v\nwant\n%#v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestHeadingID(t *testing.T) {
+	doc := "# Hello, World!\n\n## 日本語の見出し\n\n## Hello, World!\n\n### `code` and **bold** [link](x)\n\n" +
+		"## カスタム {#custom}\n\nSetext Title\n---\n\n## A  B_c-d\n\n## Hello, World!"
+	var got []string
+	for _, b := range ofKind(Parse(strings.Split(doc, "\n")), Heading) {
+		got = append(got, b.ID)
+	}
+	want := []string{"hello-world", "日本語の見出し", "hello-world-1", "code-and-bold-link",
+		"custom", "setext-title", "a--b_c-d", "hello-world-2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestLinkURL(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		want []Span
+	}{
+		{"two links side by side", "[a](x.md)[b](y.md#h)",
+			[]Span{{"a", "link", 1, "x.md"}, {"b", "link", 1, "y.md#h"}}},
+		{"styles in a link", "[a **b**](#h) c",
+			[]Span{{"a ", "link", 1, "#h"}, {"b", "b,link", 1, "#h"}, {" c", "", 1, ""}}},
+		{"over a soft break", "[a\nb](u)",
+			[]Span{{"a", "link", 1, "u"}, {" ", "", 1, ""}, {"b", "link", 1, "u"}}},
+		{"reference", "[a][r]\n\n[r]: http://r.example",
+			[]Span{{"a", "link", 1, "http://r.example"}}},
+		{"autolinks", "<https://x.y> <me@x.y> www.x.y",
+			[]Span{{"https://x.y", "link", 1, "https://x.y"}, {" ", "", 1, ""},
+				{"me@x.y", "link", 1, "mailto:me@x.y"}, {" ", "", 1, ""},
+				{"www.x.y", "link", 1, "http://www.x.y"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ps := ofKind(Parse(strings.Split(c.doc, "\n")), Para)
+			if len(ps) == 0 {
+				t.Fatal("no paragraph")
+			}
+			// (The source line of a span is checked in TestPara.)
+			got := ps[0].Spans
+			for i := range got {
+				got[i].Line = 1
 			}
 			if !reflect.DeepEqual(got, c.want) {
 				t.Fatalf("got\n%#v\nwant\n%#v", got, c.want)

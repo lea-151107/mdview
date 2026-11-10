@@ -19,7 +19,10 @@
     "```go",
     "\tx := 1",
     "```",
-    "\u003e ---"
+    "\u003e ---",
+    "see [the title](#title) and \u003chttps://x.y\u003e",
+    "| [cell](b.md) |",
+    "|--|"
   ],
   "results": [
     {
@@ -27,7 +30,8 @@
       "start": 1,
       "end": 1,
       "col": 0,
-      "col_end": 0
+      "col_end": 0,
+      "id": "title"
     },
     {
       "kind": "mermaid",
@@ -319,6 +323,64 @@
       "end": 20,
       "col": 2,
       "col_end": 0
+    },
+    {
+      "kind": "para",
+      "start": 21,
+      "end": 21,
+      "col": 0,
+      "col_end": 0,
+      "spans": [
+        [
+          "see ",
+          "",
+          21
+        ],
+        [
+          "the title",
+          "link",
+          21,
+          "#title"
+        ],
+        [
+          " and ",
+          "",
+          21
+        ],
+        [
+          "https://x.y",
+          "link",
+          21,
+          "https://x.y"
+        ]
+      ]
+    },
+    {
+      "kind": "table",
+      "start": 22,
+      "end": 23,
+      "col": 0,
+      "col_end": 0,
+      "table": {
+        "align": [
+          ""
+        ],
+        "rows": [
+          [
+            [
+              [
+                "cell",
+                "link",
+                0,
+                "b.md"
+              ]
+            ]
+          ]
+        ],
+        "lines": [
+          22
+        ]
+      }
     }
   ]
 }

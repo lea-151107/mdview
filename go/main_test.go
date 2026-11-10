@@ -263,6 +263,8 @@ func TestContract(t *testing.T) {
 		"> [!TIP]", "> - > t",
 		"```go", "\tx := 1", "```",
 		"> ---",
+		"see [the title](#title) and <https://x.y>",
+		"| [cell](b.md) |", "|--|",
 	}
 	req := request{Lines: lines, Dir: dir, CacheDir: filepath.Join(dir, "cache"), Cell: []int{8, 16},
 		WidthPx: 640, HeightPx: 480, InlineMath: 1}
